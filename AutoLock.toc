@@ -1,0 +1,26 @@
+## Interface: 11200
+## Title: AutoLock |cff7fff7f TurtleWOW|r
+## Notes: Cursive and cast helper for warlocks.
+## Author: David Bechtold
+## Version: 0.0.1
+
+..\Cursive\Libs\AceLibrary\AceLibrary.lua
+..\Cursive\Libs\AceOO-2.0\AceOO-2.0.lua
+..\Cursive\Libs\AceAddon-2.0\AceAddon-2.0.lua
+..\Cursive\Libs\AceConsole\AceConsole-2.0.lua
+..\Cursive\Libs\AceHook-2.1\AceHook-2.1.lua
+..\Cursive\Libs\AceDB-2.0\AceDB-2.0.lua
+..\Cursive\Libs\AceDebug\AceDebug-2.0.lua
+..\Cursive\Libs\AceEvent-2.0\AceEvent-2.0.lua
+..\Cursive\Libs\AceLocale-2.2\AceLocale-2.2.lua
+..\Cursive\Libs\AceModuleCore-2.0\AceModuleCore-2.0.lua
+..\Cursive\Libs\Dewdrop\Dewdrop-2.0.lua
+..\Cursive\Libs\Tablet\Tablet-2.0.lua
+..\Cursive\Libs\FuBarPlugin\FuBarPlugin-2.0.lua
+
+
+AutoLock.lua
+Movement.lua
+AutoLockSpellbook.lua
+AutoLockHelper.lua
+AutoLockUI.lua
