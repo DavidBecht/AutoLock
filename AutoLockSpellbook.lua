@@ -155,7 +155,7 @@ function AutoLock:SpellbookUpdatePlacement()
 
   if IsGeneralTabSelected() and SpellBookFrame:IsVisible() then
     local anchor = FindLastFreeSpellButton()
-		-- kein freier slot gefunden
+		-- kein freier Slot gefunden
 		if anchor == -1 then return end
     btn:ClearAllPoints()
     btn:SetPoint("CENTER", anchor, "CENTER", 0, 0)
