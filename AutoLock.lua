@@ -76,7 +76,7 @@ end
 
 function HasBuff(unit, buff)
   local id, rank = SpellNameToId(buff)
-  for i=1,40 do
+  for i=1,100 do
     local texture, c, found_id = UnitBuff(unit,i)
     if not texture then break end
     if found_id==id then return true end
@@ -95,14 +95,29 @@ function HasBuffNew(buff, texturefile)
   return false
 end
 
+	if SpellStartedName == DRAIN_SOUL_NAME and (DrainSoulNumber == nil or DrainSoulNumber == "") then DrainSoulNumber = A1 end
+	if SpellStartedName == DARK_HARVEST_NAME and (DarkHarvestNumber == nil or DarkHarvestNumber == "") then DarkHarvestNumber = A1 end
+
+local ShadowTranceCastedAt = 0
+local SHADOWTRANCE_POST_PAUSE = 0.20
 local ImmolateCastedAt = 0 
 local lastSpell = nil
 local DoLock_OnCooldownUntil = 0  -- Zeitpunkt bis zu dem DoLock pausiert
 local IMMOLATE_POST_PAUSE = 0.20  -- Sekunden
 local SHOOT_NAME   = "Shoot"   -- ggf. lokalisierter Name: deDE="Schießen"
 local IMMOLATE_NAME = "Immolate"
-local WandShooting = false
+local DRAIN_SOUL_NAME = "Drain Soul"
+local DARK_HARVEST_NAME = "Dark Harvest"
+local SpellStartedName = nil
 
+local WandShooting = false
+local DrainSoulChanneling = false
+local DrainSoulNumber = nil
+local DarkHarvestChanneling = false
+local DarkHarvestNumber = nil
+
+local DrainSoulCastedAt = 0
+local DarkHarvestCastedAt = 0
 
 local f = CreateFrame("Frame")
 -- klassische Cast-Events
@@ -116,51 +131,71 @@ f:RegisterEvent("SPELLCAST_CHANNEL_STOP")
 -- Auto-Repeat (Wand/Auto Shot)
 f:RegisterEvent("START_AUTOREPEAT_SPELL")
 f:RegisterEvent("STOP_AUTOREPEAT_SPELL")
+f:RegisterEvent("BAG_UPDATE")
 
 f:SetScript("OnEvent", function()
-  local E  = event   -- Vanilla-Global
-  local A1 = arg1    -- nur bei *_START oft gesetzt (nicht bei *_STOP)
+  local E, A1 = event, arg1
 
-  -- Debug bei Bedarf:
-  -- DEFAULT_CHAT_FRAME:AddMessage(("[AutoLock] %s arg1=%s"):format(tostring(E), tostring(A1)))
+  if A1 == DrainSoulNumber then A1 = DRAIN_SOUL_NAME end   -- Drain Soul
+  if A1 == DarkHarvestNumber then A1 = DARK_HARVEST_NAME end -- Dark Harvest
 
   if E == "SPELLCAST_START" then
-    -- Nur hier gibt's (manchmal) den Namen
     lastSpell = A1
+    if A1 == DARK_HARVEST_NAME then
+      DarkHarvestChanneling = true
+    elseif A1 == DRAIN_SOUL_NAME then
+      DrainSoulChanneling = true -- falls dein Server Drain Soul als START feuert
+    end
 
   elseif E == "SPELLCAST_STOP" then
-    -- STOP hat keinen Namen → lastSpell verwenden
     if lastSpell == IMMOLATE_NAME then
       ImmolateCastedAt = GetTime()
       DoLock_OnCooldownUntil = ImmolateCastedAt + IMMOLATE_POST_PAUSE
     end
+    if lastSpell == DARK_HARVEST_NAME then
+      DarkHarvestChanneling = false
+    elseif lastSpell == DRAIN_SOUL_NAME then
+      DrainSoulChanneling = false
+    end
     lastSpell = nil
 
   elseif E == "SPELLCAST_FAILED" or E == "SPELLCAST_INTERRUPTED" then
-    -- Abbruch normaler Casts
+    if lastSpell == DARK_HARVEST_NAME then
+      DarkHarvestChanneling = false
+    elseif lastSpell == DRAIN_SOUL_NAME then
+      DrainSoulChanneling = false
+    end
     lastSpell = nil
 
   elseif E == "SPELLCAST_CHANNEL_START" then
-    -- Manche Clients feuern das für Shoot → als „wand aktiv“ werten
-    if A1 == SHOOT_NAME then
+		if SpellStartedName == DRAIN_SOUL_NAME and (DrainSoulNumber == nil or DrainSoulNumber == "") then DrainSoulNumber = A1 end
+		if SpellStartedName == DARK_HARVEST_NAME and (DarkHarvestNumber == nil or DarkHarvestNumber == "") then DarkHarvestNumber = A1 end
+		if A1 == DrainSoulNumber then A1 = DRAIN_SOUL_NAME end   -- Drain Soul
+		if A1 == DarkHarvestNumber then A1 = DARK_HARVEST_NAME end -- Dark Harvest
+		--print("SSN: " .. SpellStartedName .. " | SavedNr: " .. DrainSoulNumber .. " | Event: " .. E)
+    if A1 == DRAIN_SOUL_NAME then
+      DrainSoulChanneling = true
+    elseif A1 == DARK_HARVEST_NAME then
+      DarkHarvestChanneling = true
+    elseif A1 == SHOOT_NAME then
       WandShooting = true
-			-- print("wand true")
     end
 
   elseif E == "SPELLCAST_CHANNEL_STOP" then
+    if DrainSoulChanneling then DrainSoulChanneling = false end
+    if DarkHarvestChanneling then DarkHarvestChanneling = false end
     WandShooting = false
-		-- print("wand false")
     lastSpell = nil
 
   elseif E == "START_AUTOREPEAT_SPELL" then
-    -- sicherster Marker für Shoot/Auto Shot
     WandShooting = true
-		-- print("wand true")
 
   elseif E == "STOP_AUTOREPEAT_SPELL" then
     WandShooting = false
-		-- print("wand false")
-  end
+	
+	elseif E == "BAG_UPDATE" then
+		AutoLock:DeleteSoulShards()
+	end
 end)
 
 
@@ -169,26 +204,10 @@ end)
 -- =========================
 -- Give each spell a "priority" number. Lower = higher priority.
 -- You can change just the numbers instead of reordering the table.
-
--- helper: Bewegung prüfen (Classic-kompatibel)
-local lastX, lastY, lastCheck = 0, 0, 0
-
-local function IsPlayerMoving()
-  local now = GetTime()
-  -- nur alle 0.2s checken
-  if now - lastCheck > 0.2 then
-    lastCheck = now
-    local x, y = GetPlayerMapPosition("player")
-    if x and y then
-      if x ~= lastX or y ~= lastY then
-        lastX, lastY = x, y
-        return true
-      end
-    end
-    lastX, lastY = x, y
-  end
-  return false
+local function IsShadowTranceProc()
+  return HasBuffNew("Shadow Trance", "Interface\\Icons\\Spell_Shadow_Twilight")
 end
+
 
 -- helper für Cursive
 local function lowerNoRank(spellName)
@@ -207,7 +226,8 @@ SPELL_PRIORITY = {
     priority = 1,
     target = "target",
     condition = function(unit)
-      return HasBuffNew("Shadow Trance", "Interface\\Icons\\Spell_Shadow_Twilight")
+			if (GetTime() - ShadowTranceCastedAt) < SHADOWTRANCE_POST_PAUSE then return false end
+      return IsShadowTranceProc()
     end,
     uitext  = "Shadow Trance (Shadow Bolt)",
     enabled = true,
@@ -226,9 +246,9 @@ SPELL_PRIORITY = {
       local guid = targetGuid(unit or "target"); if not guid then return true end
       return not Cursive.curses:HasCurse(lowerNoRank("Immolate"), guid, 2)
     end,
-    enabled = true,
+    enabled = false,
   },
-	{ name = "Curse of Shadow", type = "curse", priority = 3, refreshtime = 5, target = "target", enabled = enabled },
+	{ name = "Curse of Shadow", type = "curse", priority = 3, refreshtime = 5, target = "target", enabled = true },
   { name = "Curse of Agony",  type = "curse", priority = 4, refreshtime = 1, target = "target", enabled = true },
   { name = "Corruption",      type = "curse", priority = 5, refreshtime = 1, target = "target", enabled = true },
   { name = "Siphon Life",     type = "curse", priority = 6, refreshtime = 1, target = "target", enabled = true },
@@ -240,15 +260,40 @@ SPELL_PRIORITY = {
   { name = "Curse of the Elements", type = "curse", priority = 13, refreshtime = 5, target = "target", enabled = false },
   { name = "Curse of Doom",         type = "curse", priority = 15, refreshtime = 30, target = "target", enabled = false },
 
+	{ name = "Dark Harvest",         
+		type = "cast", 
+		priority = 20,  
+		target = "target", 
+		enabled = false, 
+		condition = function(unit)
+			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if DarkHarvestChanneling then return false end
+			return true
+		end,
+	},
+	
+	{ name = "Drain Soul",         
+		type = "cast", 
+		priority = 21,  
+		target = "target", 
+		enabled = true, 
+		condition = function(unit)
+			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if DrainSoulChanneling then return false end
+			return true
+		end,
+	},
+
   -- Füllzauber / Nuke
   { 
 		name = "Shadow Bolt",     
 		type = "cast",  
-		priority = 20, 
+		priority = 30, 
 		target = "target", 
-		enabled = true,
+		enabled = false,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end   -- Kern: nicht doppelt starten},
+			if MovementEvents and MovementEvents:IsMoving() then return false end
 			return true
 		end,
 	},
@@ -299,16 +344,23 @@ local function TryAction(entry)
 		--print("Spell skipped too less mana")
 		return false
 	end
+	
+	-- print(DrainSoulChanneling)
+	
+	if DrainSoulChanneling and IsShadowTranceProc() and entry.name ~= "Shadow Bolt" then return true end 
 
+	local ok = false
   if entry.type == "cast" then
-    local ok = CastSpellByName(entry.name, t)
-    return ok
+    CastSpellByName(entry.name, t)
+		if entry.name == "Shadow Bolt" and IsShadowTranceProc() then ShadowTranceCastedAt = GetTime() end
+		ok = true
   elseif entry.type == "curse" then
-    local ok = Cursive:Curse(entry.name, t, { refreshtime = entry.refreshtime or 1 })
-    return ok
+    ok = Cursive:Curse(entry.name, t, { refreshtime = entry.refreshtime or 1 })
   end
-
-  return false
+	if ok then SpellStartedName = entry.name end
+	--print(ok)
+	--print(SpellStartedName)
+  return ok
 end
 
 -- =========================
@@ -316,6 +368,10 @@ end
 -- =========================
 function AutoLock:DoAutoLock()
 	-- print("DoAutoLock")
+	-- solange einer der beiden läuft: NICHTS anderes machen
+  if DarkHarvestChanneling then
+    return
+  end
   for _, entry in ipairs(SPELL_PRIORITY) do
     if TryAction(entry) then
       return -- stop after the first action that fires

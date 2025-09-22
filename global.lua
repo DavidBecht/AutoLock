@@ -31,6 +31,7 @@ function AutoLock:OnInitialize()
   self:RegisterDB("AutoLockDB")
 end
 
+
 function AutoLock:OnEnable()
   if not AutoLock.superwow then
     chat("SuperWoW not installed.")
