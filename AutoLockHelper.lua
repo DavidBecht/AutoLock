@@ -1,6 +1,9 @@
 -- Optional: kleine Cache-Tabelle, um wiederholte Scans zu sparen
 AutoLock_ManaCostCache = AutoLock_ManaCostCache or {}
 
+-- ensure tooltip exists for IsSoulBag() usage
+AutoLockTooltip = AutoLockTooltip or CreateFrame("GameTooltip", "AutoLockTooltip", UIParent, "GameTooltipTemplate")
+
 local function percent(cur, max)
   if not max or max <= 0 then return 0 end
   return floor((cur / max) * 100 + 0.5)
@@ -30,6 +33,65 @@ local function FindLastRankSlot(spellName)
   return lastSlot
 end
 
+-- ===================== ADDED: Highest-rank resolver + cooldown =====================
+local function GetHighestRankSpell(spellName)
+  local slot = FindLastRankSlot(spellName)
+  if not slot then return nil, nil end
+  local name, rankStr = GetSpellName(slot, BOOKTYPE_SPELL)
+  if name ~= spellName then return nil, nil end
+  return slot, rankStr
+end
+
+-- Returns: onCooldown:boolean|nil, rankStr:string|nil
+-- false -> ready; true -> on cooldown; nil -> spell not found
+function AutoLock:IsOnCooldown(spellName)
+  local slot, rankStr = GetHighestRankSpell(spellName)
+  if not slot then return nil, nil end
+  local cd = GetSpellCooldown(slot, BOOKTYPE_SPELL) -- Vanilla: 0 = ready
+  return (cd ~= 0), rankStr
+end
+-- ================================================================================
+
+-- Liest die Channel/Cast-Dauer eines Spells per Tooltip
+function AutoLock:GetSpellDurationByName(spellName)
+    -- Tooltip-Frame vorbereiten
+    local tt = AutoLock_DurationTooltip or CreateFrame(
+        "GameTooltip", "AutoLock_DurationTooltip", nil, "GameTooltipTemplate"
+    )
+    AutoLock_DurationTooltip = tt
+
+    -- Höchsten Rank nutzen
+    local slot = FindLastRankSlot(spellName)
+    if not slot then return nil end
+
+    tt:SetOwner(UIParent, "ANCHOR_NONE")
+    tt:ClearLines()
+    tt:SetSpell(slot, BOOKTYPE_SPELL)
+
+    -- Tooltip durchsuchen
+    for i = 2, tt:NumLines() do
+        local line = _G["AutoLock_DurationTooltipTextLeft"..i]
+        if line then
+            local text = line:GetText()
+						-- print(text)
+            if text then
+                -- Sucht "... over 15 sec" → liefert "15"
+                local _, _, secs = strfind(string.lower(text), "over%s+(%d+%.?%d*)%s+sec")
+								-- print(secs)
+                if secs then return tonumber(secs) end
+
+                -- Fallback für andere Sprachen:
+                -- "über 15 Sekunden" etc.
+                local _, _, secs2 = strfind(string.lower(text), "(%d+)%s+sek")
+                if secs2 then return tonumber(secs2) end
+            end
+        end
+    end
+
+    return nil
+end
+
+
 local function ExtractManaCost(text)
   if not text then return nil end
   local s, e, num = strfind(text, "(%d+)%s+[Mm][Aa][Nn][Aa]")
@@ -41,12 +103,11 @@ end
 
 -- Hilfsfunktion: Mana-Kosten lesen
 function AutoLock:GetSpellManaCostByName(spellName)
-
-	 -- Cache-Key
+  -- Cache-Key
   local key = "LAST:"..spellName
   if AutoLock_ManaCostCache[key] ~= nil then
-		-- print("from cache")
-		return AutoLock_ManaCostCache[key]
+    -- print("from cache")
+    return AutoLock_ManaCostCache[key]
   end
 
   local slot = FindLastRankSlot(spellName)
@@ -64,37 +125,42 @@ function AutoLock:GetSpellManaCostByName(spellName)
   for i = 2, tt:NumLines() do
     local text = getglobal("AutoLock_ScanTooltipTextLeft"..i):GetText()
 
-		local n = ExtractManaCost(text)
-		if n then
-			local cost = tonumber(n)
-			AutoLock_ManaCostCache[key] = cost
-			return cost
-		end
-
+    local n = ExtractManaCost(text)
+    if n then
+      local cost = tonumber(n)
+      AutoLock_ManaCostCache[key] = cost
+      return cost
+    end
   end
 
   return nil
 end
 
-
 -- Lokalisierte Schlüsselwörter (kannst du erweitern)
 local SOUL_BAG_SUBTYPES = {
-  ["Soul Bag"]   = true, -- enUS
+  ["Soul Bag"]     = true, -- enUS
   ["Seelenbeutel"] = true, -- deDE
   ["Borsa dell'anima"] = true, -- itIT (falls vorhanden)
   ["Bourse d’âme"] = true, -- frFR
-  -- weitere, falls nötig
 }
 
 -- Fallback: bekannte Namen klassischer Soul-Bags (Classic/Vanilla)
 local SOUL_BAG_NAMES = {
   ["Small Soul Pouch"]   = true,
   ["Soul Pouch"]         = true,
-  ["Felcloth Bag"]       = true, -- ist in Classic tatsächlich Soul-Bag
+  ["Felcloth Bag"]       = true,
   ["Core Felcloth Bag"]  = true,
   ["Box of Souls"]       = true,
-  -- ggf. Server-Customs ergänzen
 }
+
+-- ===================== ADDED: helper referenced elsewhere =====================
+local function GetItemIdFromLink(link)
+  if not link then return nil end
+  local s, e, idStr = strfind(link, "item:(%d+)")
+  if idStr then return tonumber(idStr) end
+  return nil
+end
+-- ==============================================================================
 
 -- Prüft, ob die Tasche im Bag-Index (1..4) eine Soul-Bag ist
 local function IsSoulBag(bag)
@@ -196,57 +262,60 @@ function AutoLock:AnySoulBagFull()
 end
 
 function AutoLock:DeleteSoulShards()
-	local full, soulbag = AutoLock:AnySoulBagFull()
-	if full and soulbag then
-
-		local SHARD_ID = 6265
-		-- alle Bags außer den Soul Bags durchsuchen
-		for bag = 0, 4 do
-			if bag ~= soulbag then
-				local slots = GetContainerNumSlots(bag) or 0
-				for slot = slots, 1, -1 do  -- rückwärts = neuester Slot zuerst
-					local link = GetContainerItemLink(bag, slot)
-					if link then
-						local itemId = string.match(link, "item:(%d+)")
-						if itemId and tonumber(itemId) == SHARD_ID then
-							PickupContainerItem(bag, slot)
-							DeleteCursorItem()
-							DEFAULT_CHAT_FRAME:AddMessage("|cffff5555[AutoLock] Soul Shard außerhalb der Soul Bag gelöscht|r")
-							return
-						end
-					end
-				end
-			end
-		end
-	end
+  local full, soulbag = AutoLock:AnySoulBagFull()
+  if full and soulbag then
+    local SHARD_ID = 6265
+    -- alle Bags außer den Soul Bags durchsuchen
+    for bag = 0, 4 do
+      if bag ~= soulbag then
+        local slots = GetContainerNumSlots(bag) or 0
+        for slot = slots, 1, -1 do  -- rückwärts = neuester Slot zuerst
+          local link = GetContainerItemLink(bag, slot)
+          if link then
+            -- Vanilla-safe statt string.match
+            local s, e, idStr = strfind(link, "item:(%d+)")
+            local itemId = idStr and tonumber(idStr) or nil
+            if itemId and itemId == SHARD_ID then
+              PickupContainerItem(bag, slot)
+              DeleteCursorItem()
+              DEFAULT_CHAT_FRAME:AddMessage("|cffff5555[AutoLock] Soul Shard außerhalb der Soul Bag gelöscht|r")
+              return
+            end
+          end
+        end
+      end
+    end
+  end
 end
 
 function test()
+  -- Beispiel: Ziel-Lebenspunkte in %
+  local thp  = UnitHealth("target")
+  local thpm = UnitHealthMax("target")
+  local tPct = percent(thp, thpm)
 
-	-- Beispiel: Ziel-Lebenspunkte in %
-	local thp  = UnitHealth("target")
-	local thpm = UnitHealthMax("target")
-	local tPct = percent(thp, thpm)
+  print("Health Target: " .. tostring(thp))
+  print("Health Target %:" .. tostring(tPct))
 
-	print("Health Target: " .. tostring(thp))
-	print("Health Target %:" .. tostring(tPct))
-	
-	
-	local thp  = UnitHealth("player")
-	local thpm = UnitHealthMax("player")
-	local tPct = percent(thp, thpm)
-	local pow     = UnitMana("player")
-	local powMax  = UnitManaMax("player")
-	local powPct = percent(thp, thpm)
+  local thp2  = UnitHealth("player")
+  local thpm2 = UnitHealthMax("player")
+  local tPct2 = percent(thp2, thpm2)
+  local pow     = UnitMana("player")
+  local powMax  = UnitManaMax("player")
+  local powPct  = percent(pow, powMax)
 
-	print("Health Player: " .. tostring(thp))
-	print("Health Player %:" .. tostring(tPct))
-	print("Mana Player: " .. tostring(pow))
-	print("Mana Player %:" .. tostring(powPct))
-	
-	
-	local id, rank = SpellNameToId("Immolate")
-	local spellInfo = GetSpellManaCostByName("Immolate")
-	print(spellInfo)
-	
+  print("Health Player: " .. tostring(thp2))
+  print("Health Player %:" .. tostring(tPct2))
+  print("Mana Player: " .. tostring(pow))
+  print("Mana Player %:" .. tostring(powPct))
+
+  local id, rank = SpellNameToId and SpellNameToId("Immolate")
+  local spellInfo = AutoLock.GetSpellManaCostByName and AutoLock:GetSpellManaCostByName("Immolate")
+  if spellInfo then print(spellInfo) end
+
+  -- Example: use IsOnCooldown
+  local onCD, r = AutoLock:IsOnCooldown("Death Coil")
+  if onCD == false then
+    if r then CastSpellByName("Death Coil("..r..")") else CastSpellByName("Death Coil") end
+  end
 end

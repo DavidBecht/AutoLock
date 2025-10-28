@@ -158,7 +158,7 @@ local function GotBuff(name, target)
 end
 
 local ShadowTranceCastedAt = 0
-local SHADOWTRANCE_POST_PAUSE = 0.30
+local SHADOWTRANCE_POST_PAUSE = 0.20
 local ImmolateCastedAt = 0 
 local lastSpell = nil
 local DoLock_OnCooldownUntil = 0  -- Zeitpunkt bis zu dem DoLock pausiert
@@ -176,6 +176,7 @@ local DarkHarvestChanneling = false
 local DarkHarvestNumber = nil
 
 local DrainSoulCastedAt = 0
+local DrainSoulDuration = 0
 local DarkHarvestCastedAt = 0
 
 local f = CreateFrame("Frame")
@@ -205,6 +206,8 @@ f:SetScript("OnEvent", function()
       DarkHarvestChanneling = true
     elseif A1 == DRAIN_SOUL_NAME then
       DrainSoulChanneling = true -- falls dein Server Drain Soul als START feuert
+			DrainSoulCastedAt = GetTime()
+			DrainSoulDuration = AutoLock:GetSpellDurationByName("Drain Soul")
     end
 		if A1 == "Shadow Bolt" and HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
 			ShadowTranceCastedAt = GetTime()
@@ -215,11 +218,8 @@ f:SetScript("OnEvent", function()
       ImmolateCastedAt = GetTime()
       DoLock_OnCooldownUntil = ImmolateCastedAt + IMMOLATE_POST_PAUSE
     end
-    if lastSpell == DARK_HARVEST_NAME then
-      DarkHarvestChanneling = false
-    elseif lastSpell == DRAIN_SOUL_NAME then
-      DrainSoulChanneling = false
-    end
+    DrainSoulChanneling = false
+		DarkHarvestChanneling = false
     lastSpell = nil
 
   elseif E == "SPELLCAST_FAILED" or E == "SPELLCAST_INTERRUPTED" then
@@ -249,6 +249,7 @@ f:SetScript("OnEvent", function()
     if name == DRAIN_SOUL_NAME then
         DrainSoulChanneling = true
         DrainSoulCastedAt = GetTime()
+				DrainSoulDuration = AutoLock:GetSpellDurationByName("Drain Soul")
     elseif name == DARK_HARVEST_NAME then
         DarkHarvestChanneling = true
     elseif name == SHOOT_NAME then
@@ -256,8 +257,8 @@ f:SetScript("OnEvent", function()
     end
 
 	elseif E == "SPELLCAST_CHANNEL_STOP" or E == "UNIT_SPELLCAST_CHANNEL_STOP" then
-			if DrainSoulChanneling then DrainSoulChanneling = false end
-			if DarkHarvestChanneling then DarkHarvestChanneling = false end
+			DrainSoulChanneling = false
+			DarkHarvestChanneling = false
 			WandShooting = false
 			lastSpell = nil
 
@@ -346,10 +347,10 @@ SPELL_PRIORITY = {
 		type = "cast",  
 		priority = 20, 
 		target = "target", 
-		enabled = false,
+		enabled = true,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
-			return true
+			local onCD, rankStr = AutoLock:IsOnCooldown("Death Coil")
+			return (onCD == false)
 		end,
 	},
 
@@ -372,7 +373,9 @@ SPELL_PRIORITY = {
 		enabled = true, 
 		condition = function(unit)
 			if MovementEvents and MovementEvents:IsMoving() then return false end
-			if DrainSoulChanneling then return false end
+			local remain = (DrainSoulCastedAt + DrainSoulDuration) - GetTime()
+			--print("Remain:", remain, "Channel:", DrainSoulChanneling)
+			if DrainSoulChanneling then return (remain <= 0.04) end
 			return true
 		end,
 	},
