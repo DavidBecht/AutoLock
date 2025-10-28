@@ -66,101 +66,13 @@ function SpellIdToName(id)
   end
 end
 
-function PrintBuffs()
-  for i=0,40 do
-    local buffId = GetPlayerBuffID(i)
-    if not buffId then break end
-    print(SpellInfo(buffId))
-  end
-end
-
-function HasAnyBuff(unit, buffName, texturefile)
-    unit = unit or "player"
-
-    local id = nil
-    if SpellNameToId then
-        id = SpellNameToId(buffName)
-    end
-
-    -- Variante 1: UnitBuff
-    for i = 1, 100 do
-        local tex, stacks, found_id = UnitBuff(unit, i)
-        if not tex then break end
-
-        -- Sicherster Check: Spell-ID
-        if id and found_id == id then
-            return true, stacks
-        end
-
-        -- Name im Texturepfad
-        if buffName and tex and strfind(tex, buffName) then
-            return true, stacks
-        end
-
-        -- Teilstring-Texture-Match
-        if texturefile and tex and strfind(tex, texturefile) then
-            return true, stacks
-        end
-    end
-
-
-    -- Variante 2: GetPlayerBuffID + SpellInfo
-    for i = 0, 40 do
-        local buffId = GetPlayerBuffID(i)
-        if not buffId then break end
-
-        local name, rank, tf = SpellInfo(buffId)
-
-        if name == buffName then
-            if texturefile and texturefile ~= "" then
-                if tf and strfind(tf, texturefile) then
-                    return true, 1
-                end
-            else
-                return true, 1
-            end
-        end
-    end
-
-    return false
-end
 
 
 
-function HasBuff(unit, buff)
-  local id, rank = SpellNameToId(buff)
-  for i=1,100 do
-    local texture, c, found_id = UnitBuff(unit,i)
-    if not texture then break end
-    if found_id==id then return true end
-  end
-  return false
-end
-
-function HasBuffNew(buff, texturefile)
-  for i=0,40 do
-    local buffId = GetPlayerBuffID(i)
-      if not buffId then break end
-      local name, rank, tf, minrange, maxrange = SpellInfo(buffId)
-      if name == buff and texturefile ~= nil and texturefile == tf then return true end
-      if name == buff and (texturefile == nil or texturefile == "") then return true end
-  end
-  return false
-end
-
-local function GotBuff(name, target)
-    local tex, cnt, ix
-    for ix = 1, 32 do
-        tex, cnt = UnitBuff("player", ix)
-        if not tex then return end
-        if strfind(tex, name) then return cnt end
-    end
-end
 
 local ShadowTranceCastedAt = 0
 local SHADOWTRANCE_POST_PAUSE = 0.20
 local ImmolateCastedAt = 0 
-local lastSpell = nil
 local DoLock_OnCooldownUntil = 0  -- Zeitpunkt bis zu dem DoLock pausiert
 local IMMOLATE_POST_PAUSE = 0.30  -- Sekunden
 local SHOOT_NAME   = "Shoot"   -- ggf. lokalisierter Name: deDE="Schießen"
@@ -197,62 +109,45 @@ f:RegisterEvent("BAG_UPDATE")
 f:SetScript("OnEvent", function()
   local E, A1 = event, arg1
 
-  if A1 == DrainSoulNumber then A1 = DRAIN_SOUL_NAME end   -- Drain Soul
-  if A1 == DarkHarvestNumber then A1 = DARK_HARVEST_NAME end -- Dark Harvest
+	-- print("Event:", E, "arg1:", arg1, "SpellStartedName:", SpellStartedName)
 
   if E == "SPELLCAST_START" then
-    lastSpell = A1
-    if A1 == DARK_HARVEST_NAME then
-      DarkHarvestChanneling = true
-    elseif A1 == DRAIN_SOUL_NAME then
-      DrainSoulChanneling = true -- falls dein Server Drain Soul als START feuert
+		if SpellStartedName == DRAIN_SOUL_NAME then
+      DrainSoulChanneling = true
 			DrainSoulCastedAt = GetTime()
 			DrainSoulDuration = AutoLock:GetSpellDurationByName("Drain Soul")
+			-- print("Channel:", DrainSoulChanneling)
     end
-		if A1 == "Shadow Bolt" and HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
+		
+		if SpellStartedName == "Shadow Bolt" and AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
 			ShadowTranceCastedAt = GetTime()
 		end
 
   elseif E == "SPELLCAST_STOP" then
-    if lastSpell == IMMOLATE_NAME then
+    if SpellStartedName == IMMOLATE_NAME then
       ImmolateCastedAt = GetTime()
       DoLock_OnCooldownUntil = ImmolateCastedAt + IMMOLATE_POST_PAUSE
     end
     DrainSoulChanneling = false
 		DarkHarvestChanneling = false
-    lastSpell = nil
+		-- print("Channel:", DrainSoulChanneling)
 
   elseif E == "SPELLCAST_FAILED" or E == "SPELLCAST_INTERRUPTED" then
-    if lastSpell == DARK_HARVEST_NAME then
-      DarkHarvestChanneling = false
-    elseif lastSpell == DRAIN_SOUL_NAME then
-      DrainSoulChanneling = false
-    end
-		if lastSpell == "Shadow Bolt" then
-			ShadowTranceCastedAt = 0 -- RESET, damit keine Pause entsteht
-		end
-    lastSpell = nil
+		ShadowTranceCastedAt = 0
+		DarkHarvestChanneling = false
+		DrainSoulChanneling = false
+		WandShooting = false
+		
 
   elseif E == "SPELLCAST_CHANNEL_START" then
-    if SpellStartedName == DRAIN_SOUL_NAME and (DrainSoulNumber == nil or DrainSoulNumber == "") then 
-        DrainSoulNumber = A1 
-    end
-    if SpellStartedName == DARK_HARVEST_NAME and (DarkHarvestNumber == nil or DarkHarvestNumber == "") then 
-        DarkHarvestNumber = A1 
-    end
-
-    if A1 == DrainSoulNumber then A1 = DRAIN_SOUL_NAME end
-    if A1 == DarkHarvestNumber then A1 = DARK_HARVEST_NAME end
-
-    local name = SpellIdToName(A1) or A1
-
-    if name == DRAIN_SOUL_NAME then
+    if SpellStartedName == DRAIN_SOUL_NAME then
         DrainSoulChanneling = true
         DrainSoulCastedAt = GetTime()
 				DrainSoulDuration = AutoLock:GetSpellDurationByName("Drain Soul")
-    elseif name == DARK_HARVEST_NAME then
+				-- print("Channel:", DrainSoulChanneling)
+    elseif SpellStartedName == DARK_HARVEST_NAME then
         DarkHarvestChanneling = true
-    elseif name == SHOOT_NAME then
+    elseif SpellStartedName == SHOOT_NAME then
         WandShooting = true
     end
 
@@ -260,7 +155,8 @@ f:SetScript("OnEvent", function()
 			DrainSoulChanneling = false
 			DarkHarvestChanneling = false
 			WandShooting = false
-			lastSpell = nil
+			ShadowTranceCastedAt = 0
+			-- print("Channel:", DrainSoulChanneling)
 
 
   elseif E == "START_AUTOREPEAT_SPELL" then
@@ -282,7 +178,7 @@ end)
 -- You can change just the numbers instead of reordering the table.
 local function IsShadowTranceProc()
     local now = GetTime()
-    local hasBuff = HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight")
+    local hasBuff = AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight")
     local recentCast = (now - ShadowTranceCastedAt) <= SHADOWTRANCE_POST_PAUSE
     return hasBuff or recentCast
 end
@@ -306,7 +202,7 @@ SPELL_PRIORITY = {
     target = "target",
     condition = function(unit)
 			if (GetTime() - ShadowTranceCastedAt) < SHADOWTRANCE_POST_PAUSE then 
-				print("shadow trance pause")
+				-- print("shadow trance pause")
 				return false 
 			end
       return IsShadowTranceProc()
@@ -374,7 +270,7 @@ SPELL_PRIORITY = {
 		condition = function(unit)
 			if MovementEvents and MovementEvents:IsMoving() then return false end
 			local remain = (DrainSoulCastedAt + DrainSoulDuration) - GetTime()
-			--print("Remain:", remain, "Channel:", DrainSoulChanneling)
+			-- print("Remain:", remain, "Channel:", DrainSoulChanneling)
 			if DrainSoulChanneling then return (remain <= 0.04) end
 			return true
 		end,
@@ -473,6 +369,7 @@ function AutoLock:DoAutoLock()
     end
   end
 end
+
 
 
 

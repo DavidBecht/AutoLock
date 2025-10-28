@@ -92,6 +92,67 @@ function AutoLock:GetSpellDurationByName(spellName)
 end
 
 
+function AutoLock:PrintBuffs()
+  for i=0,40 do
+    local buffId = GetPlayerBuffID(i)
+    if not buffId then break end
+    print(SpellInfo(buffId))
+  end
+end
+
+function AutoLock:HasAnyBuff(unit, buffName, texturefile)
+    unit = unit or "player"
+
+    local id = nil
+    if SpellNameToId then
+        id = SpellNameToId(buffName)
+    end
+
+    -- Variante 1: UnitBuff
+    for i = 1, 100 do
+        local tex, stacks, found_id = UnitBuff(unit, i)
+        if not tex then break end
+
+        -- Sicherster Check: Spell-ID
+        if id and found_id == id then
+            return true, stacks
+        end
+
+        -- Name im Texturepfad
+        if buffName and tex and strfind(tex, buffName) then
+            return true, stacks
+        end
+
+        -- Teilstring-Texture-Match
+        if texturefile and tex and strfind(tex, texturefile) then
+            return true, stacks
+        end
+    end
+
+
+    -- Variante 2: GetPlayerBuffID + SpellInfo
+    for i = 0, 40 do
+        local buffId = GetPlayerBuffID(i)
+        if not buffId then break end
+
+        local name, rank, tf = SpellInfo(buffId)
+
+        if name == buffName then
+            if texturefile and texturefile ~= "" then
+                if tf and strfind(tf, texturefile) then
+                    return true, 1
+                end
+            else
+                return true, 1
+            end
+        end
+    end
+
+    return false
+end
+
+
+
 local function ExtractManaCost(text)
   if not text then return nil end
   local s, e, num = strfind(text, "(%d+)%s+[Mm][Aa][Nn][Aa]")
