@@ -228,11 +228,41 @@ SPELL_PRIORITY = {
     uitext  = "Shadow Trance (Shadow Bolt)",
     enabled = true,
   },
+	
+	{
+		name = "Trinket Slot 1",
+		type = "trinket",
+		priority = 2,
+    target = "target",
+		condition = function(unit)
+			return AutoLock:IsTrinketReady(13) and UnitExists("target")
+    end,
+		use = function()
+			UseInventoryItem(13)
+			return true
+		end,
+		enabled = true,
+	},
+	
+	{
+		name = "Trinket Slot 2",
+		type = "trinket",
+		priority = 3,
+    target = "target",
+		condition = function(unit)
+			return AutoLock:IsTrinketReady(14) and UnitExists("target")
+    end,
+		use = function()
+			UseInventoryItem(14)
+			return true
+		end,
+		enabled = true,
+	},
 
   -- Kern-DoTs / Standard-Rota
   { name = "Immolate",        
 		type = "curse", 
-		priority = 2, 
+		priority = 5, 
 		refreshtime = 2, 
 		target = "target",
     condition = function(unit)
@@ -244,12 +274,12 @@ SPELL_PRIORITY = {
     end,
     enabled = false,
   },
-	{ name = "Curse of Shadow", type = "curse", priority = 3, refreshtime = 5, target = "target", enabled = true },
-  { name = "Curse of Agony",  type = "curse", priority = 4, refreshtime = 1, target = "target", enabled = true },
-  { name = "Corruption",      type = "curse", priority = 5, refreshtime = 1, target = "target", enabled = true },
+	{ name = "Curse of Shadow", type = "curse", priority = 6, refreshtime = 5, target = "target", enabled = true },
+  { name = "Curse of Agony",  type = "curse", priority = 7, refreshtime = 1, target = "target", enabled = true },
+  { name = "Corruption",      type = "curse", priority = 8, refreshtime = 1, target = "target", enabled = true },
   { name = "Siphon Life",     
 		type = "curse", 
-		priority = 6, 
+		priority = 9, 
 		refreshtime = 1, 
 		target = "target", 
 		enabled = true, 
@@ -347,17 +377,19 @@ local function TryAction(entry)
   -- Skip if condition fails
   if entry.condition and not entry.condition(t) then return false end
 	
-	local manaCostNextSpell =  AutoLock:GetSpellManaCostByName(entry.name)
-	local playerMana = UnitMana("player")
-	
-	-- Check player mana and may cast next spell
-	if drainSoulChannelingFinished() and playerMana < manaCostNextSpell then
-		CastSpellByName("Life Tap", t)
-		if playerMana < manaCostNextSpell then
-			-- life tap not possible -> too less health
-			return false
+	if entry.type ~= "trinket" then
+		local manaCostNextSpell =  AutoLock:GetSpellManaCostByName(entry.name)
+		local playerMana = UnitMana("player")
+		
+		-- Check player mana and may cast next spell
+		if manaCostNextSpell and drainSoulChannelingFinished() and playerMana < manaCostNextSpell then
+			CastSpellByName("Life Tap", t)
+			if playerMana < manaCostNextSpell then
+				-- life tap not possible -> too less health
+				return false
+			end
 		end
-	end
+	end 
 	
 	local ok = false
   if entry.type == "cast" then
@@ -366,6 +398,8 @@ local function TryAction(entry)
 		ok = true
   elseif entry.type == "curse" then
     ok = Cursive:Curse(entry.name, t, { refreshtime = entry.refreshtime or 1 })
+	elseif entry.type == "trinket" then
+		ok = entry.use()
   end
 	if ok then SpellStartedName = entry.name end
   return ok

@@ -349,6 +349,14 @@ function AutoLock:DeleteSoulShards()
   end
 end
 
+function AutoLock:IsTrinketReady(slot)
+    local start, duration, enable = GetInventoryItemCooldown("player", slot)
+    if enable == 1 and duration == 0 then
+        return true
+    end
+    return false
+end
+
 function test()
   -- Beispiel: Ziel-Lebenspunkte in %
   local thp  = UnitHealth("target")
