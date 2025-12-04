@@ -547,12 +547,16 @@ function AutoLock:CreateUI()
   local refresh = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   refresh:SetWidth(90); refresh:SetHeight(20)
   refresh:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 10, 10)
-  refresh:SetText("Aktualisieren")
+  refresh:SetText("Apply")
   refresh:SetScript("OnClick", function() AutoLock:PrioScrollUpdate() end)
-
-  local hint = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-  hint:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 12)
-  hint:SetText("Up/Down verschiebt · Checkbox aktiviert/deaktiviert")
+	
+	local newCofig = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  newCofig:SetWidth(90); newCofig:SetHeight(20)
+  newCofig:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 120, 10)
+  newCofig:SetText("New Config")
+  newCofig:SetScript("OnClick", function() AutoLockNewConfigFrame:Show() end)
+	
+	
 
   CreatePrioUIOnce(frame)
   AutoLock:PrioScrollUpdate()
@@ -627,3 +631,72 @@ function AutoLock:InitUI()
   self:CreateMinimapButton()
   DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00AutoLockUI:|r Loaded.")
 end
+
+AutoLockSelectedIcon = nil
+function AutoLockNewConfigPopupFrame_Update()
+    local numMacroIcons = GetNumMacroIcons()
+    local offset = FauxScrollFrame_GetOffset(AutoLockNewConfigPopupScrollFrame)
+		local num_macros_icons_shown = 25
+		local num_icons_per_row = 5
+		local num_icons_rows = 6
+		local macro_icon_row_height = 36;
+		
+    for i = 1, num_macros_icons_shown do
+        local index = offset * num_icons_per_row + i
+
+        local button = _G["AutoLockNewConfigPopupButton"..i]
+        local icon   = _G["AutoLockNewConfigPopupButton"..i.."Icon"]
+
+        if index <= numMacroIcons then
+            icon:SetTexture(GetMacroIconInfo(index))
+            button:Show()
+        else
+            icon:SetTexture(nil)
+            button:Hide()
+        end
+				
+				if index == AutoLockSelectedIcon then
+					button:SetChecked(true)
+				else
+					button:SetChecked(false)
+				end
+    end
+
+    FauxScrollFrame_Update(
+        AutoLockNewConfigPopupScrollFrame,
+        ceil(numMacroIcons / num_icons_per_row),
+        num_icons_rows,
+        macro_icon_row_height
+    )
+end
+
+function AutoLockNewConfigPopupFrame_OnHide()
+    if AutoLockNewConfigPopupEditBox then
+        AutoLockNewConfigPopupEditBox:ClearFocus()
+    end
+    AutoLockSelectedIcon = nil
+
+    if AutoLockConfigFrameOkayButton then
+        AutoLockConfigFrameOkayButton:Enable()
+    end
+    if AutoLockConfigFrameCancelButton then
+        AutoLockConfigFrameCancelButton:Enable()
+    end
+
+    if AutoLockNewConfigPopupEditBox then
+        AutoLockNewConfigPopupEditBox:SetText("")
+    end
+
+    if AutoLockRefreshConfigList then
+        AutoLockRefreshConfigList()
+    end
+end
+
+function AutoLockNewConfigPopupButton_OnClick()
+		local num_icons_per_row = 6
+    AutoLockSelectedIcon =
+        this:GetID() + FauxScrollFrame_GetOffset(AutoLockNewConfigPopupScrollFrame) * num_icons_per_row
+
+    AutoLockNewConfigPopupFrame_Update() -- WICHTIG!
+end
+

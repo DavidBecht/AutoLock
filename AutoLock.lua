@@ -66,8 +66,18 @@ function SpellIdToName(id)
   end
 end
 
+local function GetPetSpellSlot(spellName)
+    for slot = 1, 10 do
+        local name = GetPetActionInfo(slot)
+        if name and name == spellName then
+            return slot
+        end
+    end
+    return nil
+end
+
 local ShadowTranceCastedAt = 0
-local SHADOWTRANCE_POST_PAUSE = 0.50
+local SHADOWTRANCE_POST_PAUSE = 0.7
 local ImmolateCastedAt = 0 
 local DoLock_OnCooldownUntil = 0  -- Zeitpunkt bis zu dem DoLock pausiert
 local IMMOLATE_POST_PAUSE = 0.30  -- Sekunden
@@ -230,9 +240,22 @@ SPELL_PRIORITY = {
   },
 	
 	{
+    name = "Firebolt",
+    type = "pet",
+    priority = 2,
+    target = "target",
+    enabled = true,
+    condition = function()
+        return UnitExists("target")   -- nur wenn Target existiert
+           and not UnitIsDead("pet")  -- Pet lebt
+           and UnitExists("pet")      -- Pet existiert
+    end
+	},
+	
+	{
 		name = "Trinket Slot 1",
 		type = "trinket",
-		priority = 2,
+		priority = 3,
     target = "target",
 		condition = function(unit)
 			return AutoLock:IsTrinketReady(13) and UnitExists("target")
@@ -247,7 +270,7 @@ SPELL_PRIORITY = {
 	{
 		name = "Trinket Slot 2",
 		type = "trinket",
-		priority = 3,
+		priority = 4,
     target = "target",
 		condition = function(unit)
 			return AutoLock:IsTrinketReady(14) and UnitExists("target")
@@ -258,7 +281,7 @@ SPELL_PRIORITY = {
 		end,
 		enabled = true,
 	},
-
+	
   -- Kern-DoTs / Standard-Rota
   { name = "Immolate",        
 		type = "curse", 
@@ -306,10 +329,22 @@ SPELL_PRIORITY = {
 			return (onCD == false)
 		end,
 	},
+	
+	{ 
+		name = "Shadowburn",     
+		type = "cast",  
+		priority = 21, 
+		target = "target", 
+		enabled = true,
+		condition = function(unit)
+			local onCD, rankStr = AutoLock:IsOnCooldown("Shadowburn")
+			return (onCD == false)
+		end,
+	},
 
 	{ name = "Dark Harvest",         
 		type = "cast", 
-		priority = 21,  
+		priority = 22,  
 		target = "target", 
 		enabled = false, 
 		condition = function(unit)
@@ -320,7 +355,7 @@ SPELL_PRIORITY = {
 	
 	{ name = "Drain Soul",         
 		type = "cast", 
-		priority = 22,  
+		priority = 23,  
 		target = "target", 
 		enabled = true, 
 		condition = function(unit)
@@ -377,7 +412,7 @@ local function TryAction(entry)
   -- Skip if condition fails
   if entry.condition and not entry.condition(t) then return false end
 	
-	if entry.type ~= "trinket" then
+	if entry.type ~= "trinket" and entry.type ~= "pet" then
 		local manaCostNextSpell =  AutoLock:GetSpellManaCostByName(entry.name)
 		local playerMana = UnitMana("player")
 		
@@ -400,6 +435,9 @@ local function TryAction(entry)
     ok = Cursive:Curse(entry.name, t, { refreshtime = entry.refreshtime or 1 })
 	elseif entry.type == "trinket" then
 		ok = entry.use()
+	elseif entry.type == "pet" then
+      local slot = GetPetSpellSlot(entry.name)
+      if slot then CastPetAction(slot) end
   end
 	if ok then SpellStartedName = entry.name end
   return ok
