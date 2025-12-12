@@ -76,11 +76,29 @@ local function GetPetSpellSlot(spellName)
     return nil
 end
 
+function UseItemIfNotOnCooldown(name)
+    for bag = 0, 4 do
+        for slot = 1, GetContainerNumSlots(bag) do
+            local link = GetContainerItemLink(bag, slot)
+            if link then
+                local item = string.match(link, "%[(.+)%]")
+                if item == name then
+                    local start, duration, enable = GetContainerItemCooldown(bag, slot)
+                    if enable == 1 and (duration == 0 or start + duration <= GetTime()) then
+                        UseContainerItem(bag, slot)
+                        return true
+                    end
+                end
+            end
+        end
+    end
+end
+
 local ShadowTranceCastedAt = 0
-local SHADOWTRANCE_POST_PAUSE = 0.7
+local SHADOWTRANCE_POST_PAUSE = 0.50
 local ImmolateCastedAt = 0 
 local DoLock_OnCooldownUntil = 0  -- Zeitpunkt bis zu dem DoLock pausiert
-local IMMOLATE_POST_PAUSE = 0.30  -- Sekunden
+local IMMOLATE_POST_PAUSE = 0.50  -- Sekunden
 local SHOOT_NAME   = "Shoot"   -- ggf. lokalisierter Name: deDE="Schießen"
 local IMMOLATE_NAME = "Immolate"
 local DRAIN_SOUL_NAME = "Drain Soul"
@@ -127,26 +145,31 @@ f:SetScript("OnEvent", function()
         DarkHarvestChanneling = true
 				DarkHarvestCastedAt = GetTime()
 				DarkHarvestDuration = AutoLock:GetSpellDurationByName("Dark Harvest")
-    end
-		
-		if SpellStartedName == "Shadow Bolt" and AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
-			ShadowTranceCastedAt = GetTime()
+		elseif SpellStartedName == "Shadow Bolt" and AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
+			print("NightProc")
+		elseif SpellStartedName == "Shadow Bolt" then
+			print("ShadowBolt")
 		end
 
   elseif E == "SPELLCAST_STOP" then
     if SpellStartedName == IMMOLATE_NAME then
       ImmolateCastedAt = GetTime()
       DoLock_OnCooldownUntil = ImmolateCastedAt + IMMOLATE_POST_PAUSE
+		elseif SpellStartedName == "Shadow Bolt" and ShadowTrancePending then
+			ShadowTranceCastedAt = GetTime()
+			-- print("ShadowTranceCastedAt:", ShadowTranceCastedAt)
+			-- print("Nightfall proc consumed")
     end
     DrainSoulChanneling = false
 		DarkHarvestChanneling = false
 		-- print("Channel:", DrainSoulChanneling)
 
   elseif E == "SPELLCAST_FAILED" or E == "SPELLCAST_INTERRUPTED" then
-		ShadowTranceCastedAt = 0
+		--if SpellStartedName == "Shadow Bolt" and ShadowTrancePending then ShadowTranceCastedAt = 0 end
 		DarkHarvestChanneling = false
 		DrainSoulChanneling = false
 		WandShooting = false
+		
 		
 
   elseif E == "SPELLCAST_CHANNEL_START" then
@@ -167,8 +190,7 @@ f:SetScript("OnEvent", function()
 			DrainSoulChanneling = false
 			DarkHarvestChanneling = false
 			WandShooting = false
-			ShadowTranceCastedAt = 0
-			-- print("Channel:", DrainSoulChanneling)
+			--if SpellStartedName == "Shadow Bolt" and ShadowTrancePending then ShadowTranceCastedAt = 0 end
 
 
   elseif E == "START_AUTOREPEAT_SPELL" then
@@ -190,8 +212,11 @@ end)
 local function IsShadowTranceProc()
     local now = GetTime()
     local hasBuff = AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight")
-    local recentCast = (now - ShadowTranceCastedAt) <= SHADOWTRANCE_POST_PAUSE
-    return hasBuff or recentCast
+		if hasBuff then
+			local recentCast = ((now - ShadowTranceCastedAt) <= SHADOWTRANCE_POST_PAUSE)
+			return not recentCast
+		end
+    return hasBuff
 end
 
 -- helper für Cursive
@@ -229,10 +254,6 @@ SPELL_PRIORITY = {
     priority = 1,
     target = "target",
     condition = function(unit)
-			if (GetTime() - ShadowTranceCastedAt) < SHADOWTRANCE_POST_PAUSE then 
-				-- print("shadow trance pause")
-				return false 
-			end
       return IsShadowTranceProc()
     end,
     uitext  = "Shadow Trance (Shadow Bolt)",
@@ -429,7 +450,11 @@ local function TryAction(entry)
 	local ok = false
   if entry.type == "cast" then
     CastSpellByName(entry.name, t)
-		if entry.name == "Shadow Bolt" and IsShadowTranceProc() then ShadowTranceCastedAt = GetTime() end
+		if entry.name == "Shadow Bolt" and AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
+			ShadowTrancePending = true
+		else
+			ShadowTrancePending = false
+    end
 		ok = true
   elseif entry.type == "curse" then
     ok = Cursive:Curse(entry.name, t, { refreshtime = entry.refreshtime or 1 })
