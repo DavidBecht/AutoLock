@@ -8,6 +8,17 @@ AutoLock = AceLibrary("AceAddon-2.0"):new(
 
 DEFAULT_CHAT_FRAME:AddMessage("AutoLock.lua loaded")
 
+local RANGE_ERRORS = {
+  ["Out of range."] = true,
+  ["You are too far away!"] = true,
+  ["Target too far away."] = true,
+
+  -- deDE
+  ["Außer Reichweite."] = true,
+  ["Ihr seid zu weit entfernt!"] = true,
+  ["Ziel ist zu weit entfernt."] = true,
+}
+
 function AutoLock:OnInitialize()
   self:RegisterChatCommand({"/autolock"}, {
     handler = self,
@@ -76,29 +87,13 @@ local function GetPetSpellSlot(spellName)
     return nil
 end
 
-function UseItemIfNotOnCooldown(name)
-    for bag = 0, 4 do
-        for slot = 1, GetContainerNumSlots(bag) do
-            local link = GetContainerItemLink(bag, slot)
-            if link then
-                local item = string.match(link, "%[(.+)%]")
-                if item == name then
-                    local start, duration, enable = GetContainerItemCooldown(bag, slot)
-                    if enable == 1 and (duration == 0 or start + duration <= GetTime()) then
-                        UseContainerItem(bag, slot)
-                        return true
-                    end
-                end
-            end
-        end
-    end
-end
+
 
 local ShadowTranceCastedAt = 0
-local SHADOWTRANCE_POST_PAUSE = 0.50
+local SHADOWTRANCE_POST_PAUSE = 0.75
 local ImmolateCastedAt = 0 
 local DoLock_OnCooldownUntil = 0  -- Zeitpunkt bis zu dem DoLock pausiert
-local IMMOLATE_POST_PAUSE = 0.50  -- Sekunden
+local IMMOLATE_POST_PAUSE = 0.75  -- Sekunden
 local SHOOT_NAME   = "Shoot"   -- ggf. lokalisierter Name: deDE="Schießen"
 local IMMOLATE_NAME = "Immolate"
 local DRAIN_SOUL_NAME = "Drain Soul"
@@ -145,10 +140,10 @@ f:SetScript("OnEvent", function()
         DarkHarvestChanneling = true
 				DarkHarvestCastedAt = GetTime()
 				DarkHarvestDuration = AutoLock:GetSpellDurationByName("Dark Harvest")
-		elseif SpellStartedName == "Shadow Bolt" and AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
-			print("NightProc")
-		elseif SpellStartedName == "Shadow Bolt" then
-			print("ShadowBolt")
+		--elseif SpellStartedName == "Shadow Bolt" and AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
+		--	print("NightProc")
+		--elseif SpellStartedName == "Shadow Bolt" then
+		--	print("ShadowBolt")
 		end
 
   elseif E == "SPELLCAST_STOP" then
@@ -169,8 +164,6 @@ f:SetScript("OnEvent", function()
 		DarkHarvestChanneling = false
 		DrainSoulChanneling = false
 		WandShooting = false
-		
-		
 
   elseif E == "SPELLCAST_CHANNEL_START" then
     if SpellStartedName == DRAIN_SOUL_NAME then
@@ -202,6 +195,7 @@ f:SetScript("OnEvent", function()
 	elseif E == "BAG_UPDATE" then
 		AutoLock:DeleteSoulShards()
 	end
+	-- SpellStartedName = nil
 end)
 
 -- =========================
@@ -347,6 +341,7 @@ SPELL_PRIORITY = {
 		enabled = true,
 		condition = function(unit)
 			local onCD, rankStr = AutoLock:IsOnCooldown("Death Coil")
+
 			return (onCD == false)
 		end,
 	},
@@ -359,6 +354,7 @@ SPELL_PRIORITY = {
 		enabled = true,
 		condition = function(unit)
 			local onCD, rankStr = AutoLock:IsOnCooldown("Shadowburn")
+	
 			return (onCD == false)
 		end,
 	},
@@ -432,8 +428,17 @@ local function TryAction(entry)
 	
   -- Skip if condition fails
   if entry.condition and not entry.condition(t) then return false end
-	
+
 	if entry.type ~= "trinket" and entry.type ~= "pet" then
+		-- Skip if spell is not in range
+		local outOfRange = AutoLock:IsSpellOutOfRange(entry.name)
+		if outOfRange == true then 
+			--print(entry.name .. ": OUT OF RANGE")
+			return false
+		elseif outOfRange == nil then 
+			print("AutoLock: No Action-Slot for spell " .. entry.name .. " found! Range check not possible") 
+		end
+		
 		local manaCostNextSpell =  AutoLock:GetSpellManaCostByName(entry.name)
 		local playerMana = UnitMana("player")
 		

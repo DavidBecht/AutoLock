@@ -10,7 +10,7 @@ local function percent(cur, max)
 end
 
 -- Hilfsfunktion: Slot für Zaubername suchen
-local function FindSpellSlot(spellName)
+function AutoLock:FindSpellSlot(spellName)
   for i = 1, 300 do
     local name = GetSpellName(i, BOOKTYPE_SPELL)
     if not name then break end
@@ -356,6 +356,82 @@ function AutoLock:IsTrinketReady(slot)
     end
     return false
 end
+
+-- Event frame
+AutoLock.EventFrame = CreateFrame("Frame")
+AutoLock.EventFrame:RegisterEvent("PLAYER_LOGIN")
+
+AutoLock.EventFrame:SetScript("OnEvent", function()
+    AutoLock:OnLogin()
+end)
+
+function AutoLock:OnLogin()
+    -- Create tooltip AFTER UI is ready
+    self.Scanner = CreateFrame(
+        "GameTooltip",
+        "AutoLockScanner",
+        UIParent,
+        "GameTooltipTemplate"
+    )
+    self.Scanner:SetOwner(UIParent, "ANCHOR_NONE")
+
+    DEFAULT_CHAT_FRAME:AddMessage("AutoLock loaded")
+end
+
+function AutoLock:HasTarget()
+  return UnitExists("target")
+end
+
+-- Find action slot by spell name (tries action text first, then tooltip)
+function AutoLock:FindActionSlotBySpellName(spellName)
+  if not spellName then return nil end
+
+  local tt = self.Scanner
+  local ttName = tt:GetName()
+  local left1 = _G[ttName .. "TextLeft1"]  -- safer than hardcoding AutoLockScannerTextLeft1
+
+  for slot = 1, 120 do
+    -- Fast path: buttons with visible text (often macros)
+    local atext = GetActionText(slot)
+    if atext == spellName then
+      return slot
+    end
+
+    -- Tooltip scan
+    tt:ClearLines()
+    tt:SetAction(slot)
+
+    local text = left1 and left1:GetText()
+    if text == spellName then
+      return slot
+    end
+  end
+
+  return nil
+end
+
+-- Returns: true(out of range), false(in range), nil(no data)
+function AutoLock:IsSpellOutOfRange(spellName)
+  if not self:HasTarget() then return false end
+
+  local slot = self:FindActionSlotBySpellName(spellName)
+  if not slot then return nil end
+
+  local r = IsActionInRange(slot)
+  if r == 0 then return true end
+  if r == 1 then return false end
+  return nil
+end
+
+-- Quick test
+function AutoLock:TestRange(spellName)
+  local slot = self:FindActionSlotBySpellName(spellName)
+  DEFAULT_CHAT_FRAME:AddMessage("Spell="..tostring(spellName).." slot="..tostring(slot))
+
+  local oor = self:IsSpellOutOfRange(spellName)
+  DEFAULT_CHAT_FRAME:AddMessage("OutOfRange="..tostring(oor))
+end
+
 
 function test()
   -- Beispiel: Ziel-Lebenspunkte in %
