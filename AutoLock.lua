@@ -137,9 +137,9 @@ f:SetScript("OnEvent", function()
 			DrainSoulDuration = AutoLock:GetSpellDurationByName("Drain Soul")
 			-- print("Channel:", DrainSoulChanneling)
 		elseif SpellStartedName == DARK_HARVEST_NAME then
-        DarkHarvestChanneling = true
-				DarkHarvestCastedAt = GetTime()
-				DarkHarvestDuration = AutoLock:GetSpellDurationByName("Dark Harvest")
+			DarkHarvestChanneling = true
+			DarkHarvestCastedAt = GetTime()
+			DarkHarvestDuration = AutoLock:GetSpellDurationByName("Dark Harvest")
 		--elseif SpellStartedName == "Shadow Bolt" and AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
 		--	print("NightProc")
 		--elseif SpellStartedName == "Shadow Bolt" then
@@ -366,6 +366,8 @@ SPELL_PRIORITY = {
 		enabled = false, 
 		condition = function(unit)
 			if MovementEvents and MovementEvents:IsMoving() then return false end
+			local onCD, rankStr = AutoLock:IsOnCooldown("Dark Harvest")
+			if onCD then return false end
 			return darkHarvestChannelingFinished()
 		end,
 	},
