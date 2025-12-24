@@ -8,17 +8,6 @@ AutoLock = AceLibrary("AceAddon-2.0"):new(
 
 DEFAULT_CHAT_FRAME:AddMessage("AutoLock.lua loaded")
 
-local RANGE_ERRORS = {
-  ["Out of range."] = true,
-  ["You are too far away!"] = true,
-  ["Target too far away."] = true,
-
-  -- deDE
-  ["Außer Reichweite."] = true,
-  ["Ihr seid zu weit entfernt!"] = true,
-  ["Ziel ist zu weit entfernt."] = true,
-}
-
 function AutoLock:OnInitialize()
   self:RegisterChatCommand({"/autolock"}, {
     handler = self,
@@ -50,7 +39,6 @@ function AutoLock:OnEnable()
   DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00AutoLock loaded. Use /autolock toggle|r")
 	self:InitUI()
 	self:SpellbookInit()
-	
 end
 
 function SpellNameToId(buff)
@@ -90,10 +78,10 @@ end
 
 
 local ShadowTranceCastedAt = 0
-local SHADOWTRANCE_POST_PAUSE = 0.75
+local SHADOWTRANCE_POST_PAUSE = 1
 local ImmolateCastedAt = 0 
 local DoLock_OnCooldownUntil = 0  -- Zeitpunkt bis zu dem DoLock pausiert
-local IMMOLATE_POST_PAUSE = 0.75  -- Sekunden
+local IMMOLATE_POST_PAUSE = 1  -- Sekunden
 local SHOOT_NAME   = "Shoot"   -- ggf. lokalisierter Name: deDE="Schießen"
 local IMMOLATE_NAME = "Immolate"
 local DRAIN_SOUL_NAME = "Drain Soul"
@@ -279,7 +267,7 @@ SPELL_PRIORITY = {
 			UseInventoryItem(13)
 			return true
 		end,
-		enabled = true,
+		enabled = false,
 	},
 	
 	{
@@ -294,24 +282,10 @@ SPELL_PRIORITY = {
 			UseInventoryItem(14)
 			return true
 		end,
-		enabled = true,
+		enabled = false,
 	},
-	
-  -- Kern-DoTs / Standard-Rota
-  { name = "Immolate",        
-		type = "curse", 
-		priority = 5, 
-		refreshtime = 2, 
-		target = "target",
-    condition = function(unit)
-      if GetTime() < DoLock_OnCooldownUntil then return false end
-      if MovementEvents and MovementEvents:IsMoving() then return false end
-      if not (Cursive and Cursive.curses) then return true end
-      local guid = targetGuid(unit or "target"); if not guid then return true end
-      return not Cursive.curses:HasCurse(lowerNoRank("Immolate"), guid, 2)
-    end,
-    enabled = false,
-  },
+
+  
 	{ name = "Curse of Shadow", type = "curse", priority = 6, refreshtime = 5, target = "target", enabled = true },
   { name = "Curse of Agony",  type = "curse", priority = 7, refreshtime = 1, target = "target", enabled = true },
   { name = "Corruption",      type = "curse", priority = 8, refreshtime = 1, target = "target", enabled = true },
@@ -332,6 +306,50 @@ SPELL_PRIORITY = {
   { name = "Curse of Tongues",      type = "curse", priority = 12, refreshtime = 5, target = "target", enabled = false },
   { name = "Curse of the Elements", type = "curse", priority = 13, refreshtime = 5, target = "target", enabled = false },
   { name = "Curse of Doom",         type = "curse", priority = 15, refreshtime = 30, target = "target", enabled = false },
+	
+	{ 
+		name = "Soul Fire",     
+		type = "cast",  
+		priority = 17, 
+		target = "target", 
+		enabled = false,
+		condition = function(unit)
+			if MovementEvents and MovementEvents:IsMoving() then return false end
+			local onCD, rankStr = AutoLock:IsOnCooldown("Soul Fire")
+			if onCD then return false end
+			return true
+		end,
+	},
+	
+	{ 
+		name = "Immolate",        
+		type = "curse", 
+		priority = 18, 
+		refreshtime = 2, 
+		target = "target",
+		enabled = false,
+    condition = function(unit)
+      if GetTime() < DoLock_OnCooldownUntil then return false end
+      if MovementEvents and MovementEvents:IsMoving() then return false end
+      local guid = targetGuid(unit or "target"); if not guid then return true end
+      return not Cursive.curses:HasCurse(lowerNoRank("Immolate"), guid, 2)
+    end,
+    
+  },
+	
+	{ 
+		name = "Conflagrate",     
+		type = "cast",  
+		priority = 19, 
+		target = "target", 
+		enabled = false,
+		condition = function(unit)
+			if MovementEvents and MovementEvents:IsMoving() then return false end
+			local onCD, rankStr = AutoLock:IsOnCooldown("Conflagrate")
+			if onCD then return false end
+			return true
+		end,
+	},
 	
 	{ 
 		name = "Death Coil",     
@@ -395,6 +413,22 @@ SPELL_PRIORITY = {
 			return true
 		end,
 	},
+	
+	
+	
+	{ 
+		name = "Searing Pain",     
+		type = "cast",  
+		priority = 32, 
+		target = "target", 
+		enabled = false,
+		condition = function(unit)
+			if MovementEvents and MovementEvents:IsMoving() then return false end
+			return true
+		end,
+	},
+	
+	
   -- Wand als Fallback (ganz unten)
   {
 		name      = SHOOT_NAME,
