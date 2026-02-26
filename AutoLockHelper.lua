@@ -4,11 +4,6 @@ AutoLock_ManaCostCache = AutoLock_ManaCostCache or {}
 -- ensure tooltip exists for IsSoulBag() usage
 AutoLockTooltip = AutoLockTooltip or CreateFrame("GameTooltip", "AutoLockTooltip", UIParent, "GameTooltipTemplate")
 
-local function percent(cur, max)
-  if not max or max <= 0 then return 0 end
-  return floor((cur / max) * 100 + 0.5)
-end
-
 -- Hilfsfunktion: Slot für Zaubername suchen
 function AutoLock:FindSpellSlot(spellName)
   for i = 1, 300 do
@@ -33,7 +28,6 @@ local function FindLastRankSlot(spellName)
   return lastSlot
 end
 
--- ===================== ADDED: Highest-rank resolver + cooldown =====================
 local function GetHighestRankSpell(spellName)
   local slot = FindLastRankSlot(spellName)
   if not slot then return nil, nil end
@@ -50,7 +44,6 @@ function AutoLock:IsOnCooldown(spellName)
   local cd = GetSpellCooldown(slot, BOOKTYPE_SPELL) -- Vanilla: 0 = ready
   return (cd ~= 0), rankStr
 end
--- ================================================================================
 
 -- Liest die Channel/Cast-Dauer eines Spells per Tooltip
 function AutoLock:GetSpellDurationByName(spellName)
@@ -73,11 +66,9 @@ function AutoLock:GetSpellDurationByName(spellName)
         local line = _G["AutoLock_DurationTooltipTextLeft"..i]
         if line then
             local text = line:GetText()
-						-- print(text)
             if text then
                 -- Sucht "... over 15 sec" → liefert "15"
                 local _, _, secs = strfind(string.lower(text), "over%s+(%d+%.?%d*)%s+sec")
-								-- print(secs)
                 if secs then return tonumber(secs) end
 
                 -- Fallback für andere Sprachen:
@@ -214,14 +205,12 @@ local SOUL_BAG_NAMES = {
   ["Box of Souls"]       = true,
 }
 
--- ===================== ADDED: helper referenced elsewhere =====================
 local function GetItemIdFromLink(link)
   if not link then return nil end
   local s, e, idStr = strfind(link, "item:(%d+)")
   if idStr then return tonumber(idStr) end
   return nil
 end
--- ==============================================================================
 
 -- Prüft, ob die Tasche im Bag-Index (1..4) eine Soul-Bag ist
 local function IsSoulBag(bag)
@@ -430,37 +419,4 @@ function AutoLock:TestRange(spellName)
 
   local oor = self:IsSpellOutOfRange(spellName)
   DEFAULT_CHAT_FRAME:AddMessage("OutOfRange="..tostring(oor))
-end
-
-
-function test()
-  -- Beispiel: Ziel-Lebenspunkte in %
-  local thp  = UnitHealth("target")
-  local thpm = UnitHealthMax("target")
-  local tPct = percent(thp, thpm)
-
-  print("Health Target: " .. tostring(thp))
-  print("Health Target %:" .. tostring(tPct))
-
-  local thp2  = UnitHealth("player")
-  local thpm2 = UnitHealthMax("player")
-  local tPct2 = percent(thp2, thpm2)
-  local pow     = UnitMana("player")
-  local powMax  = UnitManaMax("player")
-  local powPct  = percent(pow, powMax)
-
-  print("Health Player: " .. tostring(thp2))
-  print("Health Player %:" .. tostring(tPct2))
-  print("Mana Player: " .. tostring(pow))
-  print("Mana Player %:" .. tostring(powPct))
-
-  local id, rank = SpellNameToId and SpellNameToId("Immolate")
-  local spellInfo = AutoLock.GetSpellManaCostByName and AutoLock:GetSpellManaCostByName("Immolate")
-  if spellInfo then print(spellInfo) end
-
-  -- Example: use IsOnCooldown
-  local onCD, r = AutoLock:IsOnCooldown("Death Coil")
-  if onCD == false then
-    if r then CastSpellByName("Death Coil("..r..")") else CastSpellByName("Death Coil") end
-  end
 end
