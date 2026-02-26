@@ -3,10 +3,6 @@ MovementEvents = MovementEvents or {}
 do
   local listeners = { PLAYER_MOVING = {}, PLAYER_STOPPED = {} }
 
-  local function Log(msg)
-    if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cff66ccff[Move]|r "..tostring(msg)) end
-  end
-
   function MovementEvents:Register(eventName, fn)
     local list = listeners[eventName]
     if list then table.insert(list, fn) end
@@ -56,7 +52,6 @@ do
     local x, y = GetPlayerMapPosition("player")
     lastX, lastY = x, y
     lastTick = GetTime()
-    -- Log("init pos "..tostring(x)..","..tostring(y))
   end)
 
   f:SetScript("OnUpdate", function()
@@ -66,27 +61,21 @@ do
 
     local x, y = GetPlayerMapPosition("player")
     if not x or not y then EnsureMap(); return end
-    -- Log("check pos") -- zum Testen einkommentieren
-	
+
     if lastX and lastY then
       local dx, dy = x - lastX, y - lastY
       local moved = (dx*dx + dy*dy) > (EPS*EPS)
-	  -- print(moved)
 
       if moved then
         lastMoveAt = now
         if not moving then
           moving = true
           Fire("PLAYER_MOVING")
-          -- Log("moving")
-					-- print("moving")
         end
       else
         if moving and lastMoveAt and (now - lastMoveAt) > STOP_GRACE then
           moving = false
           Fire("PLAYER_STOPPED")
-          -- Log("stopped")
-					-- print("stopped")
         end
       end
     end
@@ -95,31 +84,8 @@ do
   end)
 
   function MovementEvents:IsMoving()
-    --if moving then
-    --  print("is_moving: true")
-    --else
-    --  print("is_moving: false")
-    --end
     return moving
   end
   MovementEvents._Fire = Fire
 end
 
--- Beispiel-Nutzung:
--- function hello()
---   if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cff66ccffhello() aufgerufen|r") end
--- 
---   MovementEvents:Register("PLAYER_MOVING", function()
---     if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("moving") end
---   end)
--- 
---   MovementEvents:Register("PLAYER_STOPPED", function()
---     if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("stopped") end
---   end)
--- 
---   -- einmaliger Statusdump:
---   if DEFAULT_CHAT_FRAME then
---     DEFAULT_CHAT_FRAME:AddMessage("IsMoving="..tostring(MovementEvents:IsMoving()))
---   end
--- end
--- /run hello()   -- nicht vergessen aufzurufen

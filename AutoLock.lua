@@ -75,14 +75,18 @@ local function GetPetSpellSlot(spellName)
     return nil
 end
 
-
+local function targetGuid(unit)
+  local _, guid = UnitExists(unit or "target")
+  return guid
+end
 
 local ShadowTranceCastedAt = 0
-local SHADOWTRANCE_POST_PAUSE = 1
-local ImmolateCastedAt = 0 
-local DoLock_OnCooldownUntil = 0  -- Zeitpunkt bis zu dem DoLock pausiert
-local IMMOLATE_POST_PAUSE = 1  -- Sekunden
-local SHOOT_NAME   = "Shoot"   -- ggf. lokalisierter Name: deDE="Schießen"
+local SHADOWTRANCE_POST_PAUSE = 2
+local ImmolateCastedAt = 0
+local ImmolateTargetGUID = nil
+local DoLock_OnCooldownUntil = 0  
+local IMMOLATE_POST_PAUSE = 1  
+local SHOOT_NAME   = "Shoot"
 local IMMOLATE_NAME = "Immolate"
 local DRAIN_SOUL_NAME = "Drain Soul"
 local DARK_HARVEST_NAME = "Dark Harvest"
@@ -91,6 +95,7 @@ local SpellStartedName = nil
 local WandShooting = false
 local DrainSoulChanneling = false
 local DarkHarvestChanneling = false
+local ShadowTrancePending = false
 
 local DrainSoulCastedAt = 0
 local DrainSoulDuration = 0
@@ -114,9 +119,7 @@ f:RegisterEvent("STOP_AUTOREPEAT_SPELL")
 f:RegisterEvent("BAG_UPDATE")
 
 f:SetScript("OnEvent", function()
-  local E, A1 = event, arg1
-
-	-- print("Event:", E, "arg1:", arg1, "SpellStartedName:", SpellStartedName)
+  local E = event
 
   if E == "SPELLCAST_START" then
 		if SpellStartedName == DRAIN_SOUL_NAME then
@@ -128,30 +131,26 @@ f:SetScript("OnEvent", function()
 			DarkHarvestChanneling = true
 			DarkHarvestCastedAt = GetTime()
 			DarkHarvestDuration = AutoLock:GetSpellDurationByName("Dark Harvest")
-		--elseif SpellStartedName == "Shadow Bolt" and AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
-		--	print("NightProc")
-		--elseif SpellStartedName == "Shadow Bolt" then
-		--	print("ShadowBolt")
+		elseif SpellStartedName == IMMOLATE_NAME then
+			ImmolateTargetGUID = targetGuid("target")
 		end
 
   elseif E == "SPELLCAST_STOP" then
     if SpellStartedName == IMMOLATE_NAME then
       ImmolateCastedAt = GetTime()
       DoLock_OnCooldownUntil = ImmolateCastedAt + IMMOLATE_POST_PAUSE
-		elseif SpellStartedName == "Shadow Bolt" and ShadowTrancePending then
+	elseif SpellStartedName == "Shadow Bolt" and ShadowTrancePending then
 			ShadowTranceCastedAt = GetTime()
-			-- print("ShadowTranceCastedAt:", ShadowTranceCastedAt)
-			-- print("Nightfall proc consumed")
     end
     DrainSoulChanneling = false
 		DarkHarvestChanneling = false
-		-- print("Channel:", DrainSoulChanneling)
 
   elseif E == "SPELLCAST_FAILED" or E == "SPELLCAST_INTERRUPTED" then
-		--if SpellStartedName == "Shadow Bolt" and ShadowTrancePending then ShadowTranceCastedAt = 0 end
 		DarkHarvestChanneling = false
 		DrainSoulChanneling = false
 		WandShooting = false
+		DoLock_OnCooldownUntil = 0
+		ImmolateTargetGUID = nil
 
   elseif E == "SPELLCAST_CHANNEL_START" then
     if SpellStartedName == DRAIN_SOUL_NAME then
@@ -171,7 +170,6 @@ f:SetScript("OnEvent", function()
 			DrainSoulChanneling = false
 			DarkHarvestChanneling = false
 			WandShooting = false
-			--if SpellStartedName == "Shadow Bolt" and ShadowTrancePending then ShadowTranceCastedAt = 0 end
 
 
   elseif E == "START_AUTOREPEAT_SPELL" then
@@ -183,7 +181,6 @@ f:SetScript("OnEvent", function()
 	elseif E == "BAG_UPDATE" then
 		AutoLock:DeleteSoulShards()
 	end
-	-- SpellStartedName = nil
 end)
 
 -- =========================
@@ -192,23 +189,13 @@ end)
 -- Give each spell a "priority" number. Lower = higher priority.
 -- You can change just the numbers instead of reordering the table.
 local function IsShadowTranceProc()
-    local now = GetTime()
     local hasBuff = AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight")
 		if hasBuff then
+			local now = GetTime()
 			local recentCast = ((now - ShadowTranceCastedAt) <= SHADOWTRANCE_POST_PAUSE)
 			return not recentCast
 		end
     return hasBuff
-end
-
--- helper für Cursive
-local function lowerNoRank(spellName)
-  return string.lower(spellName or "")
-end
-
-local function targetGuid(unit)
-  local _, guid = UnitExists(unit or "target")
-  return guid
 end
 
 local function drainSoulChannelingFinished()
@@ -286,13 +273,13 @@ SPELL_PRIORITY = {
 	},
 
   
-	{ name = "Curse of Shadow", type = "curse", priority = 6, refreshtime = 5, target = "target", enabled = true },
-  { name = "Curse of Agony",  type = "curse", priority = 7, refreshtime = 1, target = "target", enabled = true },
-  { name = "Corruption",      type = "curse", priority = 8, refreshtime = 1, target = "target", enabled = true },
+	{ name = "Curse of Shadow", type = "curse", priority = 6, refreshtime = 0, target = "target", enabled = true },
+  { name = "Curse of Agony",  type = "curse", priority = 7, refreshtime = 0, target = "target", enabled = true },
+  { name = "Corruption",      type = "curse", priority = 8, refreshtime = 0, target = "target", enabled = true },
   { name = "Siphon Life",     
 		type = "curse", 
 		priority = 9, 
-		refreshtime = 1, 
+		refreshtime = 0, 
 		target = "target", 
 		enabled = true, 
 		condition = function(unit)
@@ -301,11 +288,11 @@ SPELL_PRIORITY = {
 	},
 
   -- Situative Warlock Curses (bei Bedarf aktivieren/umsortieren)
-  { name = "Curse of Recklessness", type = "curse", priority = 10, refreshtime = 5, target = "target", enabled = false },
-  { name = "Curse of Weakness",     type = "curse", priority = 11, refreshtime = 5, target = "target", enabled = false },
-  { name = "Curse of Tongues",      type = "curse", priority = 12, refreshtime = 5, target = "target", enabled = false },
-  { name = "Curse of the Elements", type = "curse", priority = 13, refreshtime = 5, target = "target", enabled = false },
-  { name = "Curse of Doom",         type = "curse", priority = 15, refreshtime = 30, target = "target", enabled = false },
+  { name = "Curse of Recklessness", type = "curse", priority = 10, refreshtime = 0, target = "target", enabled = false },
+  { name = "Curse of Weakness",     type = "curse", priority = 11, refreshtime = 0, target = "target", enabled = false },
+  { name = "Curse of Tongues",      type = "curse", priority = 12, refreshtime = 0, target = "target", enabled = false },
+  { name = "Curse of the Elements", type = "curse", priority = 13, refreshtime = 0, target = "target", enabled = false },
+  { name = "Curse of Doom",         type = "curse", priority = 15, refreshtime = 0, target = "target", enabled = false },
 	
 	{ 
 		name = "Soul Fire",     
@@ -325,14 +312,16 @@ SPELL_PRIORITY = {
 		name = "Immolate",        
 		type = "curse", 
 		priority = 18, 
-		refreshtime = 2, 
+		refreshtime = 1, 
 		target = "target",
 		enabled = false,
     condition = function(unit)
-      if GetTime() < DoLock_OnCooldownUntil then return false end
+			local _targetGUID = targetGuid("target")
+			if DoLock_OnCooldownUntil > 0 and _targetGUID == ImmolateTargetGUID then
+				if GetTime() < DoLock_OnCooldownUntil then return false end
+			end
       if MovementEvents and MovementEvents:IsMoving() then return false end
-      local guid = targetGuid(unit or "target"); if not guid then return true end
-      return not Cursive.curses:HasCurse(lowerNoRank("Immolate"), guid, 2)
+      return true
     end,
     
   },
@@ -468,8 +457,7 @@ local function TryAction(entry)
 	if entry.type ~= "trinket" and entry.type ~= "pet" then
 		-- Skip if spell is not in range
 		local outOfRange = AutoLock:IsSpellOutOfRange(entry.name)
-		if outOfRange == true then 
-			--print(entry.name .. ": OUT OF RANGE")
+		if outOfRange == true then
 			return false
 		elseif outOfRange == nil then 
 			print("AutoLock: No Action-Slot for spell " .. entry.name .. " found! Range check not possible") 
