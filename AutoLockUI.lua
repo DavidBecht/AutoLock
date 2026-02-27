@@ -6,7 +6,8 @@ local Dewdrop = AceLibrary and AceLibrary("Dewdrop-2.0")
 -- =========================
 -- SavedVariables
 -- =========================
-AutoLockDB = AutoLockDB or { minimap = { x = -6, y = -6 } } -- nun Center-basiert
+AutoLockDB = AutoLockDB or { minimap = { x = -6, y = -6 }, configs = {}, activeConfig = nil }
+if not AutoLockDB.configs then AutoLockDB.configs = {} end
 AutoLockUI_ShowDisabled = true
 
 -- =========================
@@ -74,6 +75,8 @@ local rows = {}
 local header = {}
 local ROW_HEIGHT, ROW_SPACING, VISIBLE_ROWS = 20, 4, 12
 local miniBtn
+local configStrip
+local configBtns = {}
 
 -- kleines Bedingungen-Fenster (einmalig wiederverwendet)
 local condFrame
@@ -84,6 +87,69 @@ local PRIO_W  = 80
 local REF_W   = 30
 local BTN_W   = 70
 local GAP     = 10
+
+-- =========================
+-- Config helpers
+-- =========================
+-- Use uitext when available so Shadow Trance (Shadow Bolt) and
+-- the filler Shadow Bolt don't share the same key.
+local function GetSpellKey(e)
+  return (e.uitext or e.name or "?").."|"..(e.type or "?")
+end
+
+local function GetActiveConfig()
+  for _, c in ipairs(AutoLockDB.configs) do
+    if c.name == AutoLockDB.activeConfig then return c end
+  end
+end
+
+local function SnapshotSpells()
+  local t = {}
+  for _, e in ipairs(SPELL_PRIORITY) do
+    t[GetSpellKey(e)] = { enabled=e.enabled, priority=e.priority, refreshtime=e.refreshtime }
+  end
+  return t
+end
+
+local function SaveCurrentConfigSpells()
+  local cfg = GetActiveConfig()
+  if not cfg then return end
+  cfg.spells = {}
+  for _, e in ipairs(SPELL_PRIORITY) do
+    cfg.spells[GetSpellKey(e)] = {
+      enabled=e.enabled, priority=e.priority, refreshtime=e.refreshtime,
+      TH_player_hp=e.TH_player_hp,       TH_player_hp_cmp=e.TH_player_hp_cmp,
+      TH_player_mana=e.TH_player_mana,   TH_player_mana_cmp=e.TH_player_mana_cmp,
+      TH_target_hp=e.TH_target_hp,       TH_target_hp_cmp=e.TH_target_hp_cmp,
+      TH_mode=e.TH_mode,
+    }
+  end
+end
+
+local function ApplyConfigToSpells(cfg)
+  for _, e in ipairs(SPELL_PRIORITY) do
+    local s = cfg.spells and cfg.spells[GetSpellKey(e)]
+    if s then
+      e.enabled = s.enabled
+      if s.priority    ~= nil then e.priority    = s.priority    end
+      if s.refreshtime ~= nil then e.refreshtime = s.refreshtime end
+      e.TH_player_hp=s.TH_player_hp;     e.TH_player_hp_cmp=s.TH_player_hp_cmp
+      e.TH_player_mana=s.TH_player_mana; e.TH_player_mana_cmp=s.TH_player_mana_cmp
+      e.TH_target_hp=s.TH_target_hp;     e.TH_target_hp_cmp=s.TH_target_hp_cmp
+      e.TH_mode=s.TH_mode
+    end
+  end
+  SortByPriorityNumbers()
+  RenumberPriorities()
+end
+
+local function LoadConfig(cfg)
+  if not cfg then return end
+  AutoLockDB.activeConfig = cfg.name
+  ApplyConfigToSpells(cfg)
+  if scroll then AutoLock:PrioScrollUpdate() end
+  AutoLockRefreshConfigList()  -- forward ref to global defined below
+end
 
 -- =========================
 -- UI: Condition Box
@@ -359,6 +425,7 @@ function AutoLock:PrioScrollUpdate()
       row:Hide()
     end
   end
+  SaveCurrentConfigSpells()
 end
 
 local function CreatePrioUIOnce(parent)
@@ -369,7 +436,7 @@ local function CreatePrioUIOnce(parent)
 
   -- ==== Kopfzeile: Name | Prio | Refresh ====
   header.name = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  header.name:SetPoint("TOPLEFT", parent, "TOPLEFT", 32, -42)
+  header.name:SetPoint("TOPLEFT", parent, "TOPLEFT", 32, -97)
   header.name:SetText("Name")
 
   header.prio = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -382,7 +449,7 @@ local function CreatePrioUIOnce(parent)
 
   -- ==== ScrollFrame ====
   scroll = CreateFrame("ScrollFrame", "AutoLockPrioScroll", parent, "FauxScrollFrameTemplate")
-  scroll:SetPoint("TOPLEFT",     parent, "TOPLEFT",   8, -36)
+  scroll:SetPoint("TOPLEFT",     parent, "TOPLEFT",   8, -91)
   scroll:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -8, 34)
   scroll:EnableMouse(false)
   scroll:EnableMouseWheel(true)
@@ -411,7 +478,7 @@ local function CreatePrioUIOnce(parent)
     row:SetPoint("LEFT",  parent, "LEFT", 10, 0)
     row:SetPoint("RIGHT", parent, "RIGHT", -10, 0)
     if i == 1 then
-      row:SetPoint("TOP", parent, "TOP", 0, -60)
+      row:SetPoint("TOP", parent, "TOP", 0, -115)
     else
       row:SetPoint("TOP", rows[i-1], "BOTTOM", 0, -ROW_SPACING)
     end
@@ -505,7 +572,7 @@ function AutoLock:CreateUI()
 
   frame = CreateFrame("Frame", "AutoLockFrame", UIParent)
   frame:SetWidth(700)
-  frame:SetHeight((ROW_HEIGHT+ROW_SPACING)*VISIBLE_ROWS + 92)
+  frame:SetHeight((ROW_HEIGHT+ROW_SPACING)*VISIBLE_ROWS + 147)
   frame:ClearAllPoints()
   frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
   frame:SetFrameStrata("DIALOG")
@@ -531,9 +598,22 @@ function AutoLock:CreateUI()
   local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
   close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
 
+  configStrip = CreateFrame("Frame", "AutoLockConfigStrip", frame)
+  configStrip:SetPoint("TOPLEFT",  frame, "TOPLEFT",  6, -26)
+  configStrip:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -6, -26)
+  configStrip:SetHeight(52)
+  configStrip:SetBackdrop({
+    bgFile="Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile="Interface\\Tooltips\\UI-Tooltip-Border",
+    tile=true, tileSize=16, edgeSize=8,
+    insets={left=2, right=2, top=2, bottom=2}
+  })
+  configStrip:SetBackdropColor(0, 0, 0, 0.4)
+  AutoLockRefreshConfigList()
+
   local filterCheck = CreateFrame("CheckButton", "AutoLockFilterCheck", frame, "UICheckButtonTemplate")
   filterCheck:SetWidth(20); filterCheck:SetHeight(20)
-  filterCheck:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -28)
+  filterCheck:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -83)
   filterCheck:SetChecked(AutoLockUI_ShowDisabled and 1 or nil)
   filterCheck.text = filterCheck:CreateFontString(nil,	  "OVERLAY", "GameFontNormalSmall")
   filterCheck.text:SetPoint("LEFT", filterCheck, "RIGHT", 4, 0)
@@ -628,6 +708,7 @@ function AutoLock:CreateMinimapButton()
 end
 
 function AutoLock:InitUI()
+  self:InitConfigs()
   self:CreateMinimapButton()
   DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00AutoLockUI:|r Loaded.")
 end
@@ -693,10 +774,133 @@ function AutoLockNewConfigPopupFrame_OnHide()
 end
 
 function AutoLockNewConfigPopupButton_OnClick()
-		local num_icons_per_row = 6
+		local num_icons_per_row = 5
     AutoLockSelectedIcon =
         this:GetID() + FauxScrollFrame_GetOffset(AutoLockNewConfigPopupScrollFrame) * num_icons_per_row
 
     AutoLockNewConfigPopupFrame_Update() -- WICHTIG!
+end
+
+-- =========================
+-- Config strip renderer
+-- =========================
+-- Uses Button (not CheckButton) so RegisterForClicks/arg1 work reliably.
+-- Active config is highlighted with a gold vertex tint instead of checked state.
+function AutoLockRefreshConfigList()
+  if not configStrip then return end
+  for _, b in ipairs(configBtns) do b:Hide() end
+  configBtns = {}
+  local x = 6
+  for _, cfg in ipairs(AutoLockDB.configs) do
+    local btn = CreateFrame("Button", nil, configStrip)
+    btn:SetWidth(46); btn:SetHeight(50)
+    btn:SetPoint("TOPLEFT", configStrip, "TOPLEFT", x, -2)
+    btn:EnableMouse(true)
+    btn:RegisterForClicks("LeftButton", "RightButton")
+
+    local iconTex = btn:CreateTexture(nil, "ARTWORK")
+    iconTex:SetWidth(36); iconTex:SetHeight(36)
+    iconTex:SetPoint("TOP", btn, "TOP", 0, -2)
+    local tex = (cfg.icon and cfg.icon > 0)
+                and GetMacroIconInfo(cfg.icon)
+                or  "Interface\\Icons\\INV_Misc_QuestionMark"
+    iconTex:SetTexture(tex)
+    -- gold tint = active, grey tint = inactive
+    if AutoLockDB.activeConfig == cfg.name then
+      iconTex:SetVertexColor(1, 0.8, 0.2)
+    else
+      iconTex:SetVertexColor(0.6, 0.6, 0.6)
+    end
+
+    local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    lbl:SetPoint("TOP", iconTex, "BOTTOM", 0, -1)
+    lbl:SetWidth(46); lbl:SetJustifyH("CENTER")
+    local short = string.sub(cfg.name, 1, 6)
+    if string.len(cfg.name) > 6 then short = short .. ".." end
+    lbl:SetText(short)
+
+    btn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
+
+    local cfgRef = cfg
+    btn:SetScript("OnClick", function()
+      if arg1 == "RightButton" then
+        AutoLock_PendingDeleteConfig = cfgRef
+        StaticPopup_Show("AUTOLOCK_DELETE_CONFIG", cfgRef.name)
+      else
+        LoadConfig(cfgRef)
+      end
+    end)
+
+    table.insert(configBtns, btn)
+    x = x + 50
+  end
+end
+
+-- =========================
+-- Delete confirmation
+-- =========================
+StaticPopupDialogs["AUTOLOCK_DELETE_CONFIG"] = {
+  text = "Delete config \"%s\"?",
+  button1 = "Delete", button2 = "Cancel",
+  OnAccept = function()
+    local cfg = AutoLock_PendingDeleteConfig
+    if not cfg then return end
+    local newList = {}
+    for _, c in ipairs(AutoLockDB.configs) do
+      if c.name ~= cfg.name then table.insert(newList, c) end
+    end
+    AutoLockDB.configs = newList
+    if AutoLockDB.activeConfig == cfg.name then
+      if table.getn(AutoLockDB.configs) > 0 then
+        LoadConfig(AutoLockDB.configs[1])
+      else
+        AutoLockDB.activeConfig = nil
+        AutoLockRefreshConfigList()
+      end
+    else
+      AutoLockRefreshConfigList()
+    end
+  end,
+  timeout=0, whileDead=1, hideOnEscape=1,
+}
+AutoLock_PendingDeleteConfig = nil
+
+-- =========================
+-- New-config save
+-- =========================
+function AutoLockNewConfigPopup_Save()
+  local name = AutoLockNewConfigPopupEditBox and AutoLockNewConfigPopupEditBox:GetText() or ""
+  name = string.gsub(name, "^%s+", "")
+  name = string.gsub(name, "%s+$", "")
+  if name == "" then
+    DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Config name cannot be empty.")
+    return
+  end
+  for _, c in ipairs(AutoLockDB.configs) do
+    if c.name == name then
+      DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Config \"" .. name .. "\" already exists.")
+      return
+    end
+  end
+  local newCfg = { name=name, icon=AutoLockSelectedIcon or 1, spells=SnapshotSpells() }
+  table.insert(AutoLockDB.configs, newCfg)
+  AutoLockNewConfigFrame:Hide()  -- triggers OnHide (clears editbox + icon)
+  LoadConfig(newCfg)
+end
+
+-- =========================
+-- InitConfigs
+-- =========================
+function AutoLock:InitConfigs()
+  if not AutoLockDB.configs then AutoLockDB.configs = {} end
+  if table.getn(AutoLockDB.configs) == 0 then
+    -- Seed a "Default" config from the current SPELL_PRIORITY state.
+    SortByPriorityNumbers()
+    RenumberPriorities()
+    table.insert(AutoLockDB.configs, { name="Default", icon=1, spells=SnapshotSpells() })
+    AutoLockDB.activeConfig = "Default"
+  end
+  local cfg = GetActiveConfig()
+  if cfg then ApplyConfigToSpells(cfg) end
 end
 
