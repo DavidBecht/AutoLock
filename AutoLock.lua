@@ -6,8 +6,6 @@ AutoLock = AceLibrary("AceAddon-2.0"):new(
 	"AceHook-2.1"
 )
 
-DEFAULT_CHAT_FRAME:AddMessage("AutoLock.lua loaded")
-
 function AutoLock:OnInitialize()
   self:RegisterChatCommand({"/autolock"}, {
     handler = self,
@@ -36,7 +34,7 @@ function AutoLock:OnInitialize()
 end
 
 function AutoLock:OnEnable()
-  DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00AutoLock loaded. Use /autolock toggle|r")
+  AutoLockLog.Info("Loaded. Use /autolock toggle")
 	self:InitUI()
 	self:SpellbookInit()
 end

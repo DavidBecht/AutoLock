@@ -216,7 +216,7 @@ end
 local function ShowCondFrameForEntry(entry, anchor)
   if not entry then return end
   if not Dewdrop then
-    DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock: Dewdrop-2.0 nicht gefunden – Conditions-Menü deaktiviert.|r")
+    AutoLockLog.Warning("Dewdrop-2.0 not found – Conditions menu disabled.")
     return
   end
 
@@ -743,7 +743,7 @@ end
 function AutoLock:InitUI()
   self:InitConfigs()
   self:CreateMinimapButton()
-  DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00AutoLockUI:|r Loaded.")
+  AutoLockLog.Info("Loaded.")
 end
 
 AutoLockSelectedIcon = nil
@@ -822,7 +822,7 @@ end
 -- =========================
 local function AutoLockPickupConfigMacro(cfg)
   if not (CreateMacro and GetMacroIndexByName and EditMacro and PickupMacro and GetNumMacros) then
-    DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Macro API not available.")
+    AutoLockLog.Warning("Macro API not available.")
     return
   end
   local macroName = "AL:" .. string.sub(cfg.name, 1, 12)
@@ -834,12 +834,12 @@ local function AutoLockPickupConfigMacro(cfg)
   else
     local globalCount, charCount = GetNumMacros()
     if (globalCount or 0) >= 18 and (charCount or 0) >= 18 then
-      DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r No free macro slots.")
+      AutoLockLog.Warning("No free macro slots.")
       return
     end
     id = CreateMacro(macroName, iconIndex, macroBody, 1)
     if not id then
-      DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Could not create macro.")
+      AutoLockLog.Error("Could not create macro.")
       return
     end
   end
@@ -989,7 +989,7 @@ function AutoLockNewConfigPopup_Save()
   name = string.gsub(name, "^%s+", "")
   name = string.gsub(name, "%s+$", "")
   if name == "" then
-    DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Config name cannot be empty.")
+    AutoLockLog.Warning("Config name cannot be empty.")
     return
   end
 
@@ -997,7 +997,7 @@ function AutoLockNewConfigPopup_Save()
     -- Edit mode: allow same name, disallow collision with OTHER configs
     for _, c in ipairs(AutoLockDB.configs) do
       if c.name == name and c ~= AutoLockEditingConfig then
-        DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Config \"" .. name .. "\" already exists.")
+        AutoLockLog.Warning("Config \"" .. name .. "\" already exists.")
         return
       end
     end
@@ -1011,7 +1011,7 @@ function AutoLockNewConfigPopup_Save()
     -- Create mode: existing logic unchanged
     for _, c in ipairs(AutoLockDB.configs) do
       if c.name == name then
-        DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Config \"" .. name .. "\" already exists.")
+        AutoLockLog.Warning("Config \"" .. name .. "\" already exists.")
         return
       end
     end

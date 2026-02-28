@@ -20,6 +20,7 @@
 ..\Cursive\Libs\FuBarPlugin\FuBarPlugin-2.0.lua
 
 AutoLock.xml
+AutoLockLog.lua
 AutoLock.lua
 Movement.lua
 AutoLockSpellbook.lua

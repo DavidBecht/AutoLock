@@ -1,9 +1,7 @@
 -- AutoLockSpellbook.lua — Button im SpellBook-Grid (Vanilla 1.12, ohne AceHook)
 
 local function Chat(msg)
-  if DEFAULT_CHAT_FRAME then
-    DEFAULT_CHAT_FRAME:AddMessage("|cffffcc00AutoLock:|r " .. tostring(msg))
-  end
+  AutoLockLog.Info(tostring(msg))
 end
 
 -- Macro-Setup (für Shift-Drag)

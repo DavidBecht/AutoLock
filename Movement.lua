@@ -23,8 +23,8 @@ do
       local fn = list[i]
       if fn then
         local ok, err = pcall(function() return fn(a1, a2, a3, a4) end)
-        if not ok and DEFAULT_CHAT_FRAME then
-          DEFAULT_CHAT_FRAME:AddMessage("|cffff5555MovementEvents error:|r "..tostring(err))
+        if not ok then
+          AutoLockLog.Error("MovementEvents: " .. tostring(err))
         end
       end
     end

@@ -164,7 +164,7 @@ function AutoLock:GetSpellManaCostByName(spellName)
 
   local slot = FindLastRankSlot(spellName)
   if not slot then
-    DEFAULT_CHAT_FRAME:AddMessage("Spell not found: "..spellName)
+    AutoLockLog.Warning("Spell not found: " .. spellName)
     return nil
   end
 
@@ -328,7 +328,7 @@ function AutoLock:DeleteSoulShards()
             if itemId and itemId == SHARD_ID then
               PickupContainerItem(bag, slot)
               DeleteCursorItem()
-              DEFAULT_CHAT_FRAME:AddMessage("|cffff5555[AutoLock] Soul Shard außerhalb der Soul Bag gelöscht|r")
+              AutoLockLog.Info("Soul Shard deleted outside Soul Bag.")
               return
             end
           end
@@ -364,7 +364,7 @@ function AutoLock:OnLogin()
     )
     self.Scanner:SetOwner(UIParent, "ANCHOR_NONE")
 
-    DEFAULT_CHAT_FRAME:AddMessage("AutoLock loaded")
+    AutoLockLog.Info("Loaded.")
 end
 
 function AutoLock:HasTarget()
@@ -415,8 +415,8 @@ end
 -- Quick test
 function AutoLock:TestRange(spellName)
   local slot = self:FindActionSlotBySpellName(spellName)
-  DEFAULT_CHAT_FRAME:AddMessage("Spell="..tostring(spellName).." slot="..tostring(slot))
+  AutoLockLog.Info("Spell=" .. tostring(spellName) .. " slot=" .. tostring(slot))
 
   local oor = self:IsSpellOutOfRange(spellName)
-  DEFAULT_CHAT_FRAME:AddMessage("OutOfRange="..tostring(oor))
+  AutoLockLog.Info("OutOfRange=" .. tostring(oor))
 end
