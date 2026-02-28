@@ -676,8 +676,8 @@ function AutoLock:CreateUI()
 
   -- ===== Settings panel =====
   settingsPanel = CreateFrame("Frame", "AutoLockSettingsPanel", frame)
-  settingsPanel:SetWidth(270)
-  settingsPanel:SetHeight(160)
+  settingsPanel:SetWidth(360)
+  settingsPanel:SetHeight(210)
   settingsPanel:SetFrameStrata("DIALOG")
   settingsPanel:SetFrameLevel(50)
   settingsPanel:SetBackdrop({
@@ -686,43 +686,60 @@ function AutoLock:CreateUI()
     tile = true, tileSize = 32, edgeSize = 16,
     insets = { left = 5, right = 5, top = 5, bottom = 5 }
   })
-  settingsPanel:SetBackdropColor(0, 0, 0, 1)
+  settingsPanel:SetBackdropColor(0.1, 0.1, 0.15, 1)
   settingsPanel:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 230, 34)
   settingsPanel:EnableMouse(true)
+  settingsPanel:SetMovable(true)
+  settingsPanel:RegisterForDrag("LeftButton")
+  settingsPanel:SetScript("OnDragStart", function() this:StartMoving() end)
+  settingsPanel:SetScript("OnDragStop",  function() this:StopMovingOrSizing() end)
   settingsPanel:Hide()
 
   local spTitle = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   spTitle:SetPoint("TOP", settingsPanel, "TOP", 0, -10)
   spTitle:SetText("Settings")
 
+  local spClose = CreateFrame("Button", nil, settingsPanel, "UIPanelCloseButton")
+  spClose:SetPoint("TOPRIGHT", settingsPanel, "TOPRIGHT", -4, -4)
+  spClose:SetScript("OnClick", function() settingsPanel:Hide() end)
+
   -- Checkbox: auto-delete soul shards
   local shardCheck = CreateFrame("CheckButton", "AutoLockSettingsShardsCheck", settingsPanel, "UICheckButtonTemplate")
   shardCheck:SetWidth(20); shardCheck:SetHeight(20)
-  shardCheck:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 14, -36)
+  shardCheck:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 14, -38)
   shardCheck:SetScript("OnClick", function()
     AutoLockDB.settings.autoDeleteShards = (this:GetChecked() and true) or false
   end)
   local shardLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   shardLbl:SetPoint("LEFT", shardCheck, "RIGHT", 4, 0)
+  shardLbl:SetWidth(310)
+  shardLbl:SetJustifyH("LEFT")
   shardLbl:SetText("Auto-delete Soul Shards when Soul Bag is full")
 
   -- Checkbox: use life tap
   local lifeTapCheck = CreateFrame("CheckButton", "AutoLockSettingsLifeTapCheck", settingsPanel, "UICheckButtonTemplate")
   lifeTapCheck:SetWidth(20); lifeTapCheck:SetHeight(20)
-  lifeTapCheck:SetPoint("TOPLEFT", shardCheck, "BOTTOMLEFT", 0, -12)
+  lifeTapCheck:SetPoint("TOPLEFT", shardCheck, "BOTTOMLEFT", 0, -14)
   lifeTapCheck:SetScript("OnClick", function()
     AutoLockDB.settings.useLifeTap = (this:GetChecked() and true) or false
   end)
   local lifeTapLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   lifeTapLbl:SetPoint("LEFT", lifeTapCheck, "RIGHT", 4, 0)
+  lifeTapLbl:SetWidth(310)
+  lifeTapLbl:SetJustifyH("LEFT")
   lifeTapLbl:SetText("Use Life Tap when low on mana")
+
+  -- Version label
+  local spVersion = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+  spVersion:SetPoint("BOTTOM", settingsPanel, "BOTTOM", 0, 52)
+  spVersion:SetText("AutoLock v0.0.11")
 
   -- Buy me a coffee button
   -- Update the URL below with your PayPal.me link.
   local PAYPAL_URL = "https://paypal.me/TWoWCoffee"
   local coffeeBtn = CreateFrame("Button", nil, settingsPanel, "UIPanelButtonTemplate")
-  coffeeBtn:SetWidth(200); coffeeBtn:SetHeight(22)
-  coffeeBtn:SetPoint("BOTTOM", settingsPanel, "BOTTOM", 0, 14)
+  coffeeBtn:SetWidth(220); coffeeBtn:SetHeight(22)
+  coffeeBtn:SetPoint("BOTTOM", settingsPanel, "BOTTOM", 0, 18)
   coffeeBtn:SetText("Buy me a Coffee - PayPal")
   coffeeBtn:SetScript("OnClick", function()
     AutoLockLog.Info("Support AutoLock - PayPal link:")
@@ -1008,7 +1025,7 @@ function AutoLockRefreshConfigList()
       GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
       GameTooltip:SetText(cfgRef.name, 1, 0.82, 0)
       GameTooltip:AddLine("Left-click: Load config", 0.9, 0.9, 0.9)
-      GameTooltip:AddLine("Shift + drag: Place on action bar", 0.9, 0.9, 0.9)
+      GameTooltip:AddLine("Drag: Place on action bar", 0.9, 0.9, 0.9)
       GameTooltip:AddLine("Right-click: Edit", 0.9, 0.9, 0.9)
       GameTooltip:AddLine("Shift + right-click: Delete", 0.9, 0.9, 0.9)
       GameTooltip:Show()
@@ -1018,9 +1035,7 @@ function AutoLockRefreshConfigList()
     end)
 
     btn:SetScript("OnDragStart", function()
-      if IsShiftKeyDown and IsShiftKeyDown() then
-        AutoLockPickupConfigMacro(cfgRef)
-      end
+      AutoLockPickupConfigMacro(cfgRef)
     end)
 
     btn:SetScript("OnClick", function()

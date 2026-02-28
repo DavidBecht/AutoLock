@@ -2,9 +2,7 @@
 
 > **Priority-based spell rotation addon for Warlocks on [TurtleWoW](https://turtle-wow.org) (Vanilla WoW 1.12)**
 
-<!-- IMAGE: Banner / hero screenshot of the main AutoLock UI open in-game, showing the spell priority list, config strip at the top, and the minimap button in the corner. Suggested size: 900×400 px. -->
-
----
+![alt text](assets/main_window.png)
 
 ## Table of Contents
 
@@ -26,7 +24,6 @@
 - [Dependencies & Startup Warnings](#dependencies--startup-warnings)
 - [Support](#support)
 
----
 
 ## What is AutoLock?
 
@@ -41,19 +38,14 @@ Key highlights:
 - **Soul Shard management** — optionally auto-deletes shards sitting outside your Soul Bag when your Soul Bag is full.
 - **Life Tap automation** — optionally casts Life Tap when you run low on mana before a cast.
 
----
-
 ## Requirements
 
 | Dependency | Required | Purpose |
 |---|---|---|
 | **TurtleWoW** (patch 1.12) | Yes | Client version the addon targets |
-| **Cursive** | Yes* | Handles curse application and refresh timers |
-| **SuperWoW** | Strongly recommended | Enables buff detection (Shadow Trance, etc.) |
-
-> *The Cursive libraries are bundled in the addon's TOC — Cursive must be installed for the addon to load at all. If SuperWoW is absent, buff-based features (Shadow Trance detection, buff tracking) are silently skipped with a warning.
-
----
+| **Cursive** | Yes | Handles curse application and refresh timers |
+| **SuperWoW** |Yes | Enables buff detection (Shadow Trance, etc.) |
+| **English Client** | Yes | Other languanges not supported yet. |
 
 ## Installation
 
@@ -65,8 +57,6 @@ Key highlights:
 3. Launch the game. AutoLock loads automatically.
 4. On the **very first launch** after installing or after a TOC change, do a **full game restart** (not just `/reload`) so WoW picks up any new files.
 
----
-
 ## Quick Start
 
 1. Open the UI: click the **Shadow Bolt icon** on your minimap, or type `/autolock toggle`.
@@ -76,8 +66,6 @@ Key highlights:
 5. Bind a key or create a macro `/run AutoLock:DoAutoLock()` and spam it.
 
 <!-- IMAGE: Screenshot of the Quick Start flow — minimap button highlighted, then the UI open with a few spells checked. -->
-
----
 
 ## The Main UI
 
@@ -100,8 +88,6 @@ The horizontal icon strip at the top of the window shows all your saved configs.
 
 The active config is highlighted in gold. Hovering shows a tooltip with all interactions.
 
----
-
 ### Spell Priority List
 
 Each row in the list represents one spell entry.
@@ -119,9 +105,9 @@ Each row in the list represents one spell entry.
 
 Use the **Show Disabled** checkbox at the top-left to show or hide disabled spells. Click **Apply** to force-refresh the list after making changes.
 
----
-
 ### Conditions
+
+> NOT IMPLEMENTED YET. NOT WORKING
 
 Click the **Cond** button on any spell row to open the condition editor for that spell.
 
@@ -138,8 +124,6 @@ Leave a field empty to ignore that condition.
 
 **Example:** Set *Drain Soul* to Target HP ≤ 20 so it only fires for the soul shard below 20 %.
 
----
-
 ### Settings Panel
 
 Click the **Settings** button (bottom of the main window) to open the settings panel.
@@ -153,7 +137,6 @@ Click the **Settings** button (bottom of the main window) to open the settings p
 
 Settings are saved to `AutoLockDB.settings` and persist between sessions.
 
----
 
 ## Default Spell Rotation
 
@@ -185,9 +168,6 @@ The table below lists every spell entry that ships with AutoLock, sorted by defa
 | 32 | Searing Pain | cast | ❌ | Skipped while moving |
 | 99 | Shoot (Wand) | cast | ❌ | Fallback; skipped while already shooting or moving |
 
-> **Tip:** Enable *Shadow Bolt (filler)* at priority 30 as your spammable filler nuke — it sits below your DoTs and finishers so it only fires when everything else is on cooldown or already active.
-
----
 
 ## Config System
 
@@ -219,29 +199,24 @@ This lets you switch configs and fire the rotation in one keypress.
 - **Right-click** a config icon → rename and change icon.
 - **Shift + right-click** → delete (confirmation required).
 
----
-
 ## Minimap Button
 
-<!-- IMAGE: Close-up of the minimap with the shadow bolt icon button visible in the upper-right area. -->
+![alt text](assets/map_button.png)
 
 A draggable **Shadow Bolt icon** appears on your minimap.
 
 - **Click** — opens/closes the main UI.
 - **Drag** — reposition the button anywhere around the minimap. Position is saved.
 
----
-
 ## SpellBook Button
 
 AutoLock adds a button to the **General** tab of your spellbook.
 
-<!-- IMAGE: Screenshot of the spellbook General tab with the AutoLock button visible in the spell grid. -->
+![alt text](assets/spellbook.png)
 
 - **Left-click** — fires `DoAutoLock()` directly.
 - **Shift + drag** — picks up the AutoLock macro to place on an action bar.
 
----
 
 ## Slash Commands
 
@@ -250,8 +225,6 @@ AutoLock adds a button to the **General** tab of your spellbook.
 /autolock show      — open the main UI
 /autolock hide      — close the main UI
 ```
-
----
 
 ## How the Rotation Works
 
@@ -284,8 +257,6 @@ Spells marked as cast-type check the movement poller (`MovementEvents`). If the 
 
 For cast and curse spells, AutoLock searches your action bars for a slot containing that spell and calls `IsActionInRange()`. If the slot is not found, range checking is skipped with a warning. **Keep your rotation spells on your action bars.**
 
----
-
 ## Dependencies & Startup Warnings
 
 At login, AutoLock prints a coloured status line for each potential issue:
@@ -302,13 +273,14 @@ Log format: `[AutoLock][Level]: message`
 - `[Warning]` — yellow
 - `[Error]` — red
 
----
 
 ## Support
 
 If AutoLock saves you from manually tracking your dots, consider buying the author a coffee! ☕
 
 Click the **"Buy me a Coffee – PayPal"** button inside the Settings panel to print the link to your chat window, then copy it to your browser.
+
+<a href="https://paypal.me/TWoWCoffee"><img src="assets/dark.svg" height="72"></a>
 
 <!-- IMAGE: Screenshot of the Settings panel with the PayPal button highlighted. -->
 

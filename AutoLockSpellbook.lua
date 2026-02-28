@@ -4,7 +4,7 @@ local function Chat(msg)
   AutoLockLog.Info(tostring(msg))
 end
 
--- Macro-Setup (für Shift-Drag)
+-- Macro-Setup (Fallback ohne aktive Config)
 local MACRO_NAME = "AutoLock"
 local ICON_INDEX = 1            -- WICHTIG: in 1.12 muss das eine ZAHL sein (Icon-Index)
 local MACRO_ICON = "INV_Misc_QuestionMark"
@@ -16,10 +16,35 @@ local function PickupAutoLockMacro()
     return
   end
 
-  local id = GetMacroIndexByName(MACRO_NAME)
+  -- Aktive Config zur Drag-Zeit einbetten, damit der Actionbar-Button
+  -- immer genau diese Config ausführt – unabhängig davon, was später
+  -- im Hauptfenster angeklickt wird.
+  local activeName = AutoLockDB and AutoLockDB.activeConfig
+  local macroName, macroBody, iconIdx
+
+  if activeName and activeName ~= "" then
+    macroName = "AL:" .. string.sub(activeName, 1, 12)
+    macroBody = '/run AutoLock:LoadConfigByName("' .. activeName .. '");AutoLock:DoAutoLock()'
+    iconIdx = ICON_INDEX
+    -- Icon der aktiven Config verwenden, falls vorhanden
+    if AutoLockDB.configs then
+      for _, cfg in ipairs(AutoLockDB.configs) do
+        if cfg.name == activeName then
+          iconIdx = cfg.icon or ICON_INDEX
+          break
+        end
+      end
+    end
+  else
+    macroName = MACRO_NAME
+    macroBody = MACRO_BODY
+    iconIdx = ICON_INDEX
+  end
+
+  local id = GetMacroIndexByName(macroName)
   if id and id > 0 then
     -- Edit mit numerischem Icon-Index (einige 1.12-Builds verlangen das)
-    pcall(function() EditMacro(id, MACRO_NAME, ICON_INDEX, MACRO_BODY, 1) end)
+    pcall(function() EditMacro(id, macroName, iconIdx, macroBody, 1) end)
   else
     -- Schauen, ob noch Platz ist (18 global, 18 char in 1.12)
     local globalCount, charCount = GetNumMacros()
@@ -27,7 +52,7 @@ local function PickupAutoLockMacro()
       Chat("No free macro slots (global and character macros full).")
       return
     end
-    id = CreateMacro(MACRO_NAME, ICON_INDEX, MACRO_BODY, 1)  -- 1 = per-character
+    id = CreateMacro(macroName, iconIdx, macroBody, 1)  -- 1 = per-character
     if not id then
       Chat("Could not create macro (slots full or API mismatch).")
       return
@@ -120,7 +145,7 @@ function AutoLock:SpellbookCreateButton()
     GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
     GameTooltip:SetText("AutoLock", 1,1,1)
     GameTooltip:AddLine("Linksklick: DoAutoLock()", .9,.9,.9)
-    GameTooltip:AddLine("Shift + Ziehen: Makro erstellen & ziehen", .9,.9,.9)
+    GameTooltip:AddLine("Shift + Ziehen: Makro fuer aktive Config", .9,.9,.9)
     GameTooltip:Show()
   end)
   btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
