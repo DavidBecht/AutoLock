@@ -1,3 +1,14 @@
+-- Safety fallback: if AutoLockLog.lua was not picked up yet (e.g. first
+-- launch after a TOC change without a full game restart), define no-op stubs
+-- so the rest of the file doesn't crash.  AutoLockLog.lua will overwrite
+-- these with the real coloured versions once the game is fully restarted.
+if not AutoLockLog then
+  AutoLockLog = {}
+  function AutoLockLog.Info(msg)    if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("[AutoLock] " .. tostring(msg)) end end
+  function AutoLockLog.Warning(msg) if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("[AutoLock][Warning] " .. tostring(msg)) end end
+  function AutoLockLog.Error(msg)   if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("[AutoLock][Error] " .. tostring(msg)) end end
+end
+
 -- Optional: kleine Cache-Tabelle, um wiederholte Scans zu sparen
 AutoLock_ManaCostCache = AutoLock_ManaCostCache or {}
 

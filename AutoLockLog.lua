@@ -11,7 +11,7 @@
 --   [Warning]   yellow          #ffff00
 --   [Error]     red             #ff3333
 
-AutoLockLog = {}
+AutoLockLog = AutoLockLog or {}
 
 local PREFIX = "|cff9482C9[AutoLock]|r"
 
