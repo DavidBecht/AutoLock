@@ -719,7 +719,7 @@ function AutoLock:CreateUI()
 
   -- Buy me a coffee button
   -- Update the URL below with your PayPal.me link.
-  local PAYPAL_URL = "https://paypal.me/DavidBecht"
+  local PAYPAL_URL = "https://paypal.me/TWoWCoffee"
   local coffeeBtn = CreateFrame("Button", nil, settingsPanel, "UIPanelButtonTemplate")
   coffeeBtn:SetWidth(200); coffeeBtn:SetHeight(22)
   coffeeBtn:SetPoint("BOTTOM", settingsPanel, "BOTTOM", 0, 14)

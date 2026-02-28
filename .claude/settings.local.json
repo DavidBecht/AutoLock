@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(git fetch:*)",
-      "Bash(head:*)"
+      "Bash(head:*)",
+      "Bash(cd:*)"
     ]
   }
 }
