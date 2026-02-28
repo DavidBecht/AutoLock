@@ -36,6 +36,10 @@ end
 function AutoLock:OnEnable()
   AutoLockLog.Info("Loaded. Use /autolock toggle")
 
+  if GetLocale and GetLocale() ~= "enUS" then
+    AutoLockLog.Warning("AutoLock uses English spell names. Non-English clients may have issues with spell detection.")
+  end
+
   if not GetPlayerBuffID or not SpellInfo then
     AutoLockLog.Warning("SuperWoW not detected. Buff-based features (Shadow Trance, buff tracking) will not work.")
   end

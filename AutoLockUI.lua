@@ -16,6 +16,9 @@ autoLockVarFrame:RegisterEvent("VARIABLES_LOADED")
 autoLockVarFrame:SetScript("OnEvent", function()
   if AutoLock and AutoLock.InitConfigs then
     AutoLock:InitConfigs()
+    if AutoLock.CreateMinimapButton then
+      AutoLock:CreateMinimapButton()
+    end
     if frame and frame:IsShown() then
       AutoLockRefreshConfigList()
       AutoLock:PrioScrollUpdate()
@@ -685,7 +688,14 @@ end
 -- Minimap-Button (ohne GetCursorPosition)
 -- =========================
 function AutoLock:CreateMinimapButton()
-  if miniBtn then return end
+  if miniBtn then
+    -- Button already exists; update anchor to saved position now that VARIABLES_LOADED has run.
+    if AutoLockDB and AutoLockDB.minimap then
+      miniBtn:ClearAllPoints()
+      miniBtn:SetPoint("CENTER", Minimap, "CENTER", AutoLockDB.minimap.x or 0, AutoLockDB.minimap.y or 0)
+    end
+    return
+  end
 
   miniBtn = CreateFrame("Button", "AutoLockMiniBtn", Minimap)
   miniBtn:SetWidth(32); miniBtn:SetHeight(32)
@@ -731,8 +741,9 @@ function AutoLock:CreateMinimapButton()
 
   miniBtn:SetScript("OnEnter", function()
     GameTooltip:SetOwner(this, "ANCHOR_LEFT")
-    GameTooltip:SetText("AutoLock", 1,1,1)
-    GameTooltip:AddLine("Klick: Prio-UI öffnen", .9,.9,.9)
+    GameTooltip:SetText("AutoLock", 1, 1, 1)
+    GameTooltip:AddLine("Click: Open spell priority UI", .9, .9, .9)
+    GameTooltip:AddLine("Drag: Reposition button", .9, .9, .9)
     GameTooltip:Show()
   end)
   miniBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
