@@ -190,7 +190,9 @@ f:SetScript("OnEvent", function()
     WandShooting = false
 	
 	elseif E == "BAG_UPDATE" then
-		AutoLock:DeleteSoulShards()
+		if not AutoLockDB or not AutoLockDB.settings or AutoLockDB.settings.autoDeleteShards ~= false then
+			AutoLock:DeleteSoulShards()
+		end
 	end
 end)
 
@@ -479,9 +481,11 @@ local function TryAction(entry)
 		
 		-- Check player mana and may cast next spell
 		if manaCostNextSpell and drainSoulChannelingFinished() and playerMana < manaCostNextSpell then
-			CastSpellByName("Life Tap", t)
+			if not AutoLockDB or not AutoLockDB.settings or AutoLockDB.settings.useLifeTap ~= false then
+				CastSpellByName("Life Tap", t)
+			end
 			if playerMana < manaCostNextSpell then
-				-- life tap not possible -> too less health
+				-- life tap not possible -> too less health (or disabled in settings)
 				return false
 			end
 		end

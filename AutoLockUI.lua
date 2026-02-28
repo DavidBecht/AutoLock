@@ -93,6 +93,7 @@ local ROW_HEIGHT, ROW_SPACING, VISIBLE_ROWS = 20, 4, 12
 local miniBtn
 local configStrip
 local configBtns = {}
+local settingsPanel
 
 -- kleines Bedingungen-Fenster (einmalig wiederverwendet)
 local condFrame
@@ -659,8 +660,88 @@ function AutoLock:CreateUI()
   newCofig:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 120, 10)
   newCofig:SetText("New Config")
   newCofig:SetScript("OnClick", function() AutoLockNewConfigFrame:Show() end)
-	
-	
+
+  -- ===== Settings button =====
+  local settingsBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  settingsBtn:SetWidth(90); settingsBtn:SetHeight(20)
+  settingsBtn:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 230, 10)
+  settingsBtn:SetText("Settings")
+  settingsBtn:SetScript("OnClick", function()
+    if settingsPanel and settingsPanel:IsShown() then
+      settingsPanel:Hide()
+    elseif settingsPanel then
+      settingsPanel:Show()
+    end
+  end)
+
+  -- ===== Settings panel =====
+  settingsPanel = CreateFrame("Frame", "AutoLockSettingsPanel", frame)
+  settingsPanel:SetWidth(270)
+  settingsPanel:SetHeight(160)
+  settingsPanel:SetFrameStrata("DIALOG")
+  settingsPanel:SetFrameLevel(50)
+  settingsPanel:SetBackdrop({
+    bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true, tileSize = 32, edgeSize = 16,
+    insets = { left = 5, right = 5, top = 5, bottom = 5 }
+  })
+  settingsPanel:SetBackdropColor(0, 0, 0, 1)
+  settingsPanel:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 230, 34)
+  settingsPanel:EnableMouse(true)
+  settingsPanel:Hide()
+
+  local spTitle = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  spTitle:SetPoint("TOP", settingsPanel, "TOP", 0, -10)
+  spTitle:SetText("Settings")
+
+  -- Checkbox: auto-delete soul shards
+  local shardCheck = CreateFrame("CheckButton", "AutoLockSettingsShardsCheck", settingsPanel, "UICheckButtonTemplate")
+  shardCheck:SetWidth(20); shardCheck:SetHeight(20)
+  shardCheck:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 14, -36)
+  shardCheck:SetScript("OnClick", function()
+    AutoLockDB.settings.autoDeleteShards = (this:GetChecked() and true) or false
+  end)
+  local shardLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  shardLbl:SetPoint("LEFT", shardCheck, "RIGHT", 4, 0)
+  shardLbl:SetText("Auto-delete Soul Shards when Soul Bag is full")
+
+  -- Checkbox: use life tap
+  local lifeTapCheck = CreateFrame("CheckButton", "AutoLockSettingsLifeTapCheck", settingsPanel, "UICheckButtonTemplate")
+  lifeTapCheck:SetWidth(20); lifeTapCheck:SetHeight(20)
+  lifeTapCheck:SetPoint("TOPLEFT", shardCheck, "BOTTOMLEFT", 0, -12)
+  lifeTapCheck:SetScript("OnClick", function()
+    AutoLockDB.settings.useLifeTap = (this:GetChecked() and true) or false
+  end)
+  local lifeTapLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  lifeTapLbl:SetPoint("LEFT", lifeTapCheck, "RIGHT", 4, 0)
+  lifeTapLbl:SetText("Use Life Tap when low on mana")
+
+  -- Buy me a coffee button
+  -- Update the URL below with your PayPal.me link.
+  local PAYPAL_URL = "https://paypal.me/DavidBecht"
+  local coffeeBtn = CreateFrame("Button", nil, settingsPanel, "UIPanelButtonTemplate")
+  coffeeBtn:SetWidth(200); coffeeBtn:SetHeight(22)
+  coffeeBtn:SetPoint("BOTTOM", settingsPanel, "BOTTOM", 0, 14)
+  coffeeBtn:SetText("Buy me a Coffee - PayPal")
+  coffeeBtn:SetScript("OnClick", function()
+    AutoLockLog.Info("Support AutoLock - PayPal link:")
+    AutoLockLog.Info(PAYPAL_URL)
+  end)
+  coffeeBtn:SetScript("OnEnter", function()
+    GameTooltip:SetOwner(this, "ANCHOR_TOP")
+    GameTooltip:SetText("Buy me a Coffee", 1, 0.82, 0)
+    GameTooltip:AddLine("Click to print the PayPal link to chat.", 0.9, 0.9, 0.9)
+    GameTooltip:AddLine(PAYPAL_URL, 0.5, 0.8, 1)
+    GameTooltip:Show()
+  end)
+  coffeeBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+  -- Sync checkbox states when the panel opens
+  settingsPanel:SetScript("OnShow", function()
+    shardCheck:SetChecked(AutoLockDB.settings.autoDeleteShards ~= false and 1 or nil)
+    lifeTapCheck:SetChecked(AutoLockDB.settings.useLifeTap ~= false and 1 or nil)
+  end)
 
   CreatePrioUIOnce(frame)
   AutoLock:PrioScrollUpdate()
@@ -1042,6 +1123,9 @@ function AutoLock:InitConfigs()
   end
   if not AutoLockDB.minimap then AutoLockDB.minimap = { x = -6, y = -6 } end
   if not AutoLockDB.configs then AutoLockDB.configs = {} end
+  if not AutoLockDB.settings then AutoLockDB.settings = {} end
+  if AutoLockDB.settings.autoDeleteShards == nil then AutoLockDB.settings.autoDeleteShards = true end
+  if AutoLockDB.settings.useLifeTap      == nil then AutoLockDB.settings.useLifeTap      = true end
   if table.getn(AutoLockDB.configs) == 0 then
     -- Seed a "Default" config from the current SPELL_PRIORITY state.
     SortByPriorityNumbers()
