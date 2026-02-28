@@ -49,9 +49,16 @@ function AutoLock:OnDisable()
   chat("Disabled")
 end
 
-function handleSlashCommands()
-	-- Slash
-	AutoLock.ui.ShowPrioUI()
+function handleSlashCommands(msg)
+  msg = msg or ""
+  local cmd, arg = string.match(msg, "^(%S+)%s*(.*)$")
+  if cmd == "config" and arg and arg ~= "" then
+    if not AutoLock:LoadConfigByName(arg) then
+      DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Config \"" .. arg .. "\" not found.")
+    end
+  else
+    AutoLock.ui.ShowPrioUI()
+  end
 end
 
 SLASH_AUTOLOCK = "/autolock" --creating the slash command

@@ -581,9 +581,7 @@
 				</Anchors>
 				<Scripts>
 					<OnClick>
-						print("OK")
-						<!--  AutoLockNewConfigPopupOkayButton_OnClick();
-						PlaySound("gsTitleOptionOK"); -->
+						AutoLockNewConfigPopup_Save();
 					</OnClick>
 				</Scripts>
 			</Button>
