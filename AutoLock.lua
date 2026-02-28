@@ -35,6 +35,15 @@ end
 
 function AutoLock:OnEnable()
   AutoLockLog.Info("Loaded. Use /autolock toggle")
+
+  if not GetPlayerBuffID or not SpellInfo then
+    AutoLockLog.Warning("SuperWoW not detected. Buff-based features (Shadow Trance, buff tracking) will not work.")
+  end
+
+  if not Cursive then
+    AutoLockLog.Warning("Cursive not found. Curse spells in the rotation will be skipped.")
+  end
+
 	self:InitUI()
 	self:SpellbookInit()
 end
@@ -484,7 +493,9 @@ local function TryAction(entry)
     end
 		ok = true
   elseif entry.type == "curse" then
-    ok = Cursive:Curse(entry.name, t, { refreshtime = entry.refreshtime or 1 })
+    if Cursive then
+      ok = Cursive:Curse(entry.name, t, { refreshtime = entry.refreshtime or 1 })
+    end
 	elseif entry.type == "trinket" then
 		ok = entry.use()
 	elseif entry.type == "pet" then
