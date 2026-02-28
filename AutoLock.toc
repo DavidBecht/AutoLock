@@ -3,6 +3,7 @@
 ## Notes: Cursive and cast helper for warlocks.
 ## Author: David Bechtold
 ## Version: 0.0.9
+## SavedVariables: AutoLockDB
 
 ..\Cursive\Libs\AceLibrary\AceLibrary.lua
 ..\Cursive\Libs\AceOO-2.0\AceOO-2.0.lua

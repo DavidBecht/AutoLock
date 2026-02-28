@@ -6,9 +6,22 @@ local Dewdrop = AceLibrary and AceLibrary("Dewdrop-2.0")
 -- =========================
 -- SavedVariables
 -- =========================
-AutoLockDB = AutoLockDB or { minimap = { x = -6, y = -6 }, configs = {}, activeConfig = nil }
-if not AutoLockDB.configs then AutoLockDB.configs = {} end
 AutoLockUI_ShowDisabled = true
+
+-- AutoLockDB is a SavedVariable: WoW restores it after VARIABLES_LOADED.
+-- Ace2 may fire OnEnable() before that (via DEFAULT_CHAT_FRAME hack), so
+-- we hook VARIABLES_LOADED directly and re-run InitConfigs with real data.
+local autoLockVarFrame = CreateFrame("Frame")
+autoLockVarFrame:RegisterEvent("VARIABLES_LOADED")
+autoLockVarFrame:SetScript("OnEvent", function()
+  if AutoLock and AutoLock.InitConfigs then
+    AutoLock:InitConfigs()
+    if frame and frame:IsShown() then
+      AutoLockRefreshConfigList()
+      AutoLock:PrioScrollUpdate()
+    end
+  end
+end)
 
 -- =========================
 -- Helpers: Sortieren/Verschieben
@@ -149,6 +162,13 @@ local function LoadConfig(cfg)
   ApplyConfigToSpells(cfg)
   if scroll then AutoLock:PrioScrollUpdate() end
   AutoLockRefreshConfigList()  -- forward ref to global defined below
+end
+
+function AutoLock:LoadConfigByName(name)
+  for _, cfg in ipairs(AutoLockDB.configs) do
+    if cfg.name == name then LoadConfig(cfg); return true end
+  end
+  return false
 end
 
 -- =========================
@@ -569,6 +589,7 @@ end
 -- =========================
 function AutoLock:CreateUI()
   if frame then return end
+  self:InitConfigs()  -- ensure AutoLockDB.configs is populated before rendering
 
   frame = CreateFrame("Frame", "AutoLockFrame", UIParent)
   frame:SetWidth(700)
@@ -644,9 +665,21 @@ function AutoLock:CreateUI()
   frame:Hide()
 end
 
-function AutoLock:ShowUI()   self:CreateUI(); frame:Show() end
+function AutoLock:ShowUI()
+  self:CreateUI()
+  frame:Show()
+  AutoLockRefreshConfigList()
+end
 function AutoLock:HideUI()   if frame then frame:Hide() end end
-function AutoLock:ToggleUI() self:CreateUI(); if frame:IsShown() then frame:Hide() else frame:Show() end end
+function AutoLock:ToggleUI()
+  self:CreateUI()
+  if frame:IsShown() then
+    frame:Hide()
+  else
+    frame:Show()
+    AutoLockRefreshConfigList()
+  end
+end
 
 -- =========================
 -- Minimap-Button (ohne GetCursorPosition)
@@ -666,7 +699,7 @@ function AutoLock:CreateMinimapButton()
   border:SetPoint("TOPLEFT", miniBtn, "TOPLEFT")
 
   local icon = miniBtn:CreateTexture(nil, "BACKGROUND")
-  icon:SetTexture("Interface\\Icons\\INV_Misc_QuestionMark")
+  icon:SetTexture("Interface\\Icons\\Spell_Shadow_Shadowbolt")
   icon:SetWidth(20); icon:SetHeight(20)
   icon:SetPoint("CENTER", miniBtn, "CENTER", 0, 0)
 
@@ -714,6 +747,7 @@ function AutoLock:InitUI()
 end
 
 AutoLockSelectedIcon = nil
+AutoLockEditingConfig = nil
 function AutoLockNewConfigPopupFrame_Update()
     local numMacroIcons = GetNumMacroIcons()
     local offset = FauxScrollFrame_GetOffset(AutoLockNewConfigPopupScrollFrame)
@@ -756,9 +790,11 @@ function AutoLockNewConfigPopupFrame_OnHide()
         AutoLockNewConfigPopupEditBox:ClearFocus()
     end
     AutoLockSelectedIcon = nil
+    AutoLockEditingConfig = nil
 
     if AutoLockConfigFrameOkayButton then
         AutoLockConfigFrameOkayButton:Enable()
+        AutoLockConfigFrameOkayButton:SetText("OKAY")
     end
     if AutoLockConfigFrameCancelButton then
         AutoLockConfigFrameCancelButton:Enable()
@@ -782,12 +818,52 @@ function AutoLockNewConfigPopupButton_OnClick()
 end
 
 -- =========================
+-- Config macro pickup helper
+-- =========================
+local function AutoLockPickupConfigMacro(cfg)
+  if not (CreateMacro and GetMacroIndexByName and EditMacro and PickupMacro and GetNumMacros) then
+    DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Macro API not available.")
+    return
+  end
+  local macroName = "AL:" .. string.sub(cfg.name, 1, 12)
+  local iconIndex  = cfg.icon or 1
+  local macroBody  = '/run AutoLock:LoadConfigByName("'..cfg.name..'");AutoLock:DoAutoLock()'
+  local id = GetMacroIndexByName(macroName)
+  if id and id > 0 then
+    pcall(function() EditMacro(id, macroName, iconIndex, macroBody, 1) end)
+  else
+    local globalCount, charCount = GetNumMacros()
+    if (globalCount or 0) >= 18 and (charCount or 0) >= 18 then
+      DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r No free macro slots.")
+      return
+    end
+    id = CreateMacro(macroName, iconIndex, macroBody, 1)
+    if not id then
+      DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Could not create macro.")
+      return
+    end
+  end
+  PickupMacro(id)
+end
+
+local function AutoLockOpenEditConfig(cfg)
+  AutoLockEditingConfig = cfg
+  AutoLockSelectedIcon  = cfg.icon
+  AutoLockNewConfigPopupEditBox:SetText(cfg.name)
+  AutoLockConfigFrameOkayButton:SetText("Save")
+  AutoLockNewConfigFrame:Show()
+  AutoLockNewConfigPopupFrame_Update()
+end
+
+-- =========================
 -- Config strip renderer
 -- =========================
--- Uses Button (not CheckButton) so RegisterForClicks/arg1 work reliably.
--- Active config is highlighted with a gold vertex tint instead of checked state.
 function AutoLockRefreshConfigList()
   if not configStrip then return end
+  if not AutoLockDB or not AutoLockDB.configs then return end
+  -- Calling GetNumMacroIcons() primes the macro icon list in WoW 1.12's lazy-load
+  -- system, so subsequent GetMacroIconInfo() calls return valid texture paths.
+  if GetNumMacroIcons then GetNumMacroIcons() end
   for _, b in ipairs(configBtns) do b:Hide() end
   configBtns = {}
   local x = 6
@@ -796,18 +872,31 @@ function AutoLockRefreshConfigList()
     btn:SetWidth(46); btn:SetHeight(50)
     btn:SetPoint("TOPLEFT", configStrip, "TOPLEFT", x, -2)
     btn:EnableMouse(true)
-    btn:RegisterForClicks("LeftButton", "RightButton")
+    btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    btn:RegisterForDrag("LeftButton")
+
+    local isActive = (AutoLockDB.activeConfig == cfg.name)
+
+    local borderBg = btn:CreateTexture(nil, "BACKGROUND")
+    borderBg:SetWidth(40); borderBg:SetHeight(40)
+    borderBg:SetPoint("TOP", btn, "TOP", 0, -1)
+    borderBg:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
+    borderBg:SetVertexColor(1, 0.82, 0, 1)
+    if not isActive then borderBg:Hide() end
 
     local iconTex = btn:CreateTexture(nil, "ARTWORK")
     iconTex:SetWidth(36); iconTex:SetHeight(36)
     iconTex:SetPoint("TOP", btn, "TOP", 0, -2)
-    local tex = (cfg.icon and cfg.icon > 0)
-                and GetMacroIconInfo(cfg.icon)
-                or  "Interface\\Icons\\INV_Misc_QuestionMark"
-    iconTex:SetTexture(tex)
-    -- gold tint = active, grey tint = inactive
-    if AutoLockDB.activeConfig == cfg.name then
-      iconTex:SetVertexColor(1, 0.8, 0.2)
+    local iconResult = cfg.icon and cfg.icon > 0 and GetMacroIconInfo(cfg.icon) or nil
+    if type(iconResult) ~= "string" or iconResult == "" then
+      iconResult = "Interface\\Icons\\INV_Misc_QuestionMark"
+    elseif not string.find(iconResult, "\\") and not string.find(iconResult, "/") then
+      -- GetMacroIconInfo returned a bare name with no path separator; prepend full path
+      iconResult = "Interface\\Icons\\" .. iconResult
+    end
+    iconTex:SetTexture(iconResult)
+    if isActive then
+      iconTex:SetVertexColor(1, 1, 1)
     else
       iconTex:SetVertexColor(0.6, 0.6, 0.6)
     end
@@ -822,12 +911,39 @@ function AutoLockRefreshConfigList()
     btn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
 
     local cfgRef = cfg
+
+    btn:SetScript("OnEnter", function()
+      GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
+      GameTooltip:SetText(cfgRef.name, 1, 0.82, 0)
+      GameTooltip:AddLine("Left-click: Load config", 0.9, 0.9, 0.9)
+      GameTooltip:AddLine("Shift + drag: Place on action bar", 0.9, 0.9, 0.9)
+      GameTooltip:AddLine("Right-click: Edit", 0.9, 0.9, 0.9)
+      GameTooltip:AddLine("Shift + right-click: Delete", 0.9, 0.9, 0.9)
+      GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function()
+      GameTooltip:Hide()
+    end)
+
+    btn:SetScript("OnDragStart", function()
+      if IsShiftKeyDown and IsShiftKeyDown() then
+        AutoLockPickupConfigMacro(cfgRef)
+      end
+    end)
+
     btn:SetScript("OnClick", function()
+      local shift = IsShiftKeyDown and IsShiftKeyDown()
       if arg1 == "RightButton" then
-        AutoLock_PendingDeleteConfig = cfgRef
-        StaticPopup_Show("AUTOLOCK_DELETE_CONFIG", cfgRef.name)
-      else
-        LoadConfig(cfgRef)
+        if shift then
+          AutoLock_PendingDeleteConfig = cfgRef
+          StaticPopup_Show("AUTOLOCK_DELETE_CONFIG", cfgRef.name)
+        else
+          AutoLockOpenEditConfig(cfgRef)
+        end
+      else  -- LeftButton
+        if not shift then
+          LoadConfig(cfgRef)
+        end
       end
     end)
 
@@ -840,7 +956,7 @@ end
 -- Delete confirmation
 -- =========================
 StaticPopupDialogs["AUTOLOCK_DELETE_CONFIG"] = {
-  text = "Delete config \"%s\"?",
+  text = "Are you sure you want to delete this configuration?",
   button1 = "Delete", button2 = "Cancel",
   OnAccept = function()
     local cfg = AutoLock_PendingDeleteConfig
@@ -876,22 +992,44 @@ function AutoLockNewConfigPopup_Save()
     DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Config name cannot be empty.")
     return
   end
-  for _, c in ipairs(AutoLockDB.configs) do
-    if c.name == name then
-      DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Config \"" .. name .. "\" already exists.")
-      return
+
+  if AutoLockEditingConfig then
+    -- Edit mode: allow same name, disallow collision with OTHER configs
+    for _, c in ipairs(AutoLockDB.configs) do
+      if c.name == name and c ~= AutoLockEditingConfig then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Config \"" .. name .. "\" already exists.")
+        return
+      end
     end
+    if AutoLockDB.activeConfig == AutoLockEditingConfig.name then
+      AutoLockDB.activeConfig = name
+    end
+    AutoLockEditingConfig.name = name
+    AutoLockEditingConfig.icon = AutoLockSelectedIcon or AutoLockEditingConfig.icon
+    AutoLockNewConfigFrame:Hide()
+  else
+    -- Create mode: existing logic unchanged
+    for _, c in ipairs(AutoLockDB.configs) do
+      if c.name == name then
+        DEFAULT_CHAT_FRAME:AddMessage("|cffff5555AutoLock:|r Config \"" .. name .. "\" already exists.")
+        return
+      end
+    end
+    local newCfg = { name=name, icon=AutoLockSelectedIcon or 1, spells=SnapshotSpells() }
+    table.insert(AutoLockDB.configs, newCfg)
+    AutoLockNewConfigFrame:Hide()  -- triggers OnHide (clears editbox + icon)
+    LoadConfig(newCfg)
   end
-  local newCfg = { name=name, icon=AutoLockSelectedIcon or 1, spells=SnapshotSpells() }
-  table.insert(AutoLockDB.configs, newCfg)
-  AutoLockNewConfigFrame:Hide()  -- triggers OnHide (clears editbox + icon)
-  LoadConfig(newCfg)
 end
 
 -- =========================
 -- InitConfigs
 -- =========================
 function AutoLock:InitConfigs()
+  if not AutoLockDB then
+    AutoLockDB = { minimap = { x = -6, y = -6 }, configs = {}, activeConfig = nil }
+  end
+  if not AutoLockDB.minimap then AutoLockDB.minimap = { x = -6, y = -6 } end
   if not AutoLockDB.configs then AutoLockDB.configs = {} end
   if table.getn(AutoLockDB.configs) == 0 then
     -- Seed a "Default" config from the current SPELL_PRIORITY state.
