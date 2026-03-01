@@ -29,12 +29,84 @@ function AutoLock:OnInitialize()
         type = "execute",
         func = function() AutoLock:ToggleUI() end
       },
+      debug = {
+        name = "debug",
+        desc = "Print diagnostic info to chat",
+        type = "execute",
+        func = function()
+          AutoLockLog.Info("=== AutoLock Debug ===")
+          AutoLockLog.Info("SPELL_PRIORITY entries: " .. table.getn(SPELL_PRIORITY))
+
+          -- Count how many would pass the current filter
+          local visibleCount = 0
+          local hiddenDisabled = 0
+          local hiddenUnknown  = 0
+          local ks = AutoLock.KnownSpells
+          for _, e in ipairs(SPELL_PRIORITY) do
+            if not AutoLockUI_ShowDisabled and e.enabled == false then
+              hiddenDisabled = hiddenDisabled + 1
+            else
+              local passKnown = true
+              local s2 = AutoLockDB and AutoLockDB.settings
+              if s2 and s2.hideUnknownSpells and ks and next(ks) ~= nil and not ks[e.name] then
+                passKnown = false
+                hiddenUnknown = hiddenUnknown + 1
+              end
+              if passKnown then visibleCount = visibleCount + 1 end
+            end
+          end
+          AutoLockLog.Info("Would show: " .. visibleCount .. " | hidden disabled: " .. hiddenDisabled .. " | hidden unknown: " .. hiddenUnknown)
+
+          -- KnownSpells
+          local ksCount = 0
+          if AutoLock.KnownSpells then
+            for _ in pairs(AutoLock.KnownSpells) do ksCount = ksCount + 1 end
+          end
+          AutoLockLog.Info("KnownSpells count: " .. ksCount)
+
+          -- Settings
+          local s = AutoLockDB and AutoLockDB.settings
+          AutoLockLog.Info("hideUnknownSpells: " .. tostring(s and s.hideUnknownSpells))
+          AutoLockLog.Info("ShowDisabled: " .. tostring(AutoLockUI_ShowDisabled))
+          AutoLockLog.Info("TypeFilter: " .. tostring(AutoLockTypeFilter))
+          AutoLockLog.Info("SearchText: '" .. tostring(AutoLockSearchText) .. "'")
+          AutoLockLog.Info("activeConfig: " .. tostring(AutoLockDB and AutoLockDB.activeConfig))
+
+          -- Print first 5 SPELL_PRIORITY entries
+          AutoLockLog.Info("First 5 SPELL_PRIORITY entries:")
+          for i = 1, math.min(5, table.getn(SPELL_PRIORITY)) do
+            local e = SPELL_PRIORITY[i]
+            AutoLockLog.Info("  [" .. i .. "] prio=" .. tostring(e.priority) .. " name=" .. tostring(e.name) .. " enabled=" .. tostring(e.enabled))
+          end
+        end
+      },
     }
   })
 end
 
+function AutoLock:BuildKnownSpellSet()
+  local known = {}
+  for i = 1, 1024 do
+    local name = GetSpellName(i, BOOKTYPE_SPELL)
+    if not name then break end
+    known[name] = true
+  end
+  if BOOKTYPE_PET then
+    for i = 1, 200 do
+      local name = GetSpellName(i, BOOKTYPE_PET)
+      if not name then break end
+      known[name] = true
+    end
+  end
+  for i = 1, 10 do
+    local name = GetPetActionInfo(i)
+    if type(name) == "string" and name ~= "" then known[name] = true end
+  end
+  self.KnownSpells = known
+end
+
 function AutoLock:OnEnable()
-  AutoLockLog.Info("Loaded. Use /autolock toggle")
+  AutoLockLog.Info("Loaded. SPELL_PRIORITY has " .. table.getn(SPELL_PRIORITY) .. " entries. Use /autolock toggle")
 
   if GetLocale and GetLocale() ~= "enUS" then
     AutoLockLog.Warning("AutoLock uses English spell names. Non-English clients may have issues with spell detection.")
@@ -50,6 +122,7 @@ function AutoLock:OnEnable()
 
 	self:InitUI()
 	self:SpellbookInit()
+	self:BuildKnownSpellSet()
 end
 
 function SpellNameToId(buff)
@@ -128,6 +201,7 @@ f:RegisterEvent("UNIT_SPELLCAST_CHANNEL_STOP")
 f:RegisterEvent("START_AUTOREPEAT_SPELL")
 f:RegisterEvent("STOP_AUTOREPEAT_SPELL")
 f:RegisterEvent("BAG_UPDATE")
+f:RegisterEvent("SPELLS_CHANGED")
 
 f:SetScript("OnEvent", function()
   local E = event
@@ -193,6 +267,9 @@ f:SetScript("OnEvent", function()
 		if not AutoLockDB or not AutoLockDB.settings or AutoLockDB.settings.autoDeleteShards ~= false then
 			AutoLock:DeleteSoulShards()
 		end
+	elseif E == "SPELLS_CHANGED" then
+		AutoLock:BuildKnownSpellSet()
+		AutoLock:PrioScrollUpdate()  -- refresh list now that KnownSpells is current
 	end
 end)
 
@@ -508,7 +585,10 @@ local function TryAction(entry)
 		ok = entry.use()
 	elseif entry.type == "pet" then
       local slot = GetPetSpellSlot(entry.name)
-      if slot then CastPetAction(slot) end
+      if slot then
+        CastPetAction(slot)
+        ok = true
+      end
   end
 	if ok then SpellStartedName = entry.name end
   return ok

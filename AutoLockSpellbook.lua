@@ -81,7 +81,7 @@ local function SpellButtonHasIcon(btn)
   return tex:IsShown() and (tex:GetAlpha() or 0) > 0
 end
 
--- Sucht von 12 nach 1 den letzten freien Spell-Slot auf der Seite
+-- Sucht den ersten freien Spell-Slot auf der aktuellen Seite
 local function FindLastFreeSpellButton()
   for i = 1, 12, 1 do
     local b = _G["SpellButton" .. i]
@@ -91,8 +91,7 @@ local function FindLastFreeSpellButton()
       end
     end
   end
-  -- Fallback: kein freier Slot gefunden → benutze den letzten
-  return -1
+  return nil  -- kein freier Slot gefunden
 end
 
 
@@ -106,7 +105,7 @@ function AutoLock:SpellbookCreateButton()
   if self.Spellbookbutton or not SpellBookFrame then return end
 
   local anchor = FindLastFreeSpellButton()
-  if anchor == -1 then return end
+  if not anchor then return end
 
   local btn = CreateFrame("Button", "AutoLockSpellButton", SpellBookFrame)
   self.Spellbookbutton = btn
@@ -179,7 +178,7 @@ function AutoLock:SpellbookUpdatePlacement()
   if IsGeneralTabSelected() and SpellBookFrame:IsVisible() then
     local anchor = FindLastFreeSpellButton()
 		-- kein freier slot gefunden
-		if anchor == -1 then return end
+		if not anchor then return end
     btn:ClearAllPoints()
     btn:SetPoint("CENTER", anchor, "CENTER", 0, 0)
     btn:SetWidth(anchor:GetWidth())

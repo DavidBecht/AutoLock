@@ -186,7 +186,7 @@ function AutoLock:GetSpellManaCostByName(spellName)
   tt:SetSpell(slot, BOOKTYPE_SPELL)
 
   for i = 2, tt:NumLines() do
-    local text = getglobal("AutoLock_ScanTooltipTextLeft"..i):GetText()
+    local text = _G["AutoLock_ScanTooltipTextLeft"..i]:GetText()
 
     local n = ExtractManaCost(text)
     if n then
@@ -252,13 +252,14 @@ local function IsSoulBag(bag)
     if txt then
       -- prüfe auf Subtype-Wörter
       for subType in pairs(SOUL_BAG_SUBTYPES) do
-        if string.find(txt, subType, 1, true) then
+        if strfind(txt, subType) then
           return true
         end
       end
-      -- generischer Fallback: „Soul“/„Seelen“ im Tooltip
-      if string.find(string.lower(txt), "soul", 1, true) or string.find(string.lower(txt), "seelen", 1, true) then
-        if string.find(string.lower(txt), "bag", 1, true) or string.find(string.lower(txt), "beutel", 1, true) then
+      -- generischer Fallback: „Soul”/„Seelen” im Tooltip
+      local txtLower = strlower(txt)
+      if strfind(txtLower, "soul") or strfind(txtLower, "seelen") then
+        if strfind(txtLower, "bag") or strfind(txtLower, "beutel") then
           return true
         end
       end
@@ -278,6 +279,8 @@ local function GetSoulBags()
   end
   return res
 end
+
+local SOUL_SHARD_ITEM_ID = 6265
 
 -- Zählt Soul Shards und sammelt deren Positionen (inside/outside Soul-Bags)
 function AutoLock:ScanSoulShards()
@@ -374,6 +377,9 @@ function AutoLock:OnLogin()
         "GameTooltipTemplate"
     )
     self.Scanner:SetOwner(UIParent, "ANCHOR_NONE")
+
+    -- Spellbook is ready at PLAYER_LOGIN; refresh known spell set
+    if self.BuildKnownSpellSet then self:BuildKnownSpellSet() end
 
     AutoLockLog.Info("Loaded.")
 end
