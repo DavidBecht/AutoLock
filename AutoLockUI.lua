@@ -123,6 +123,7 @@ local NAME_W  = 340  -- Spell-Name (breiter durch wegfallende Up/Down-Buttons)
 local PRIO_W  = 44   -- Prio-EditBox
 local REF_W   = 40   -- Refresh-EditBox
 local COND_W  = 56   -- Cond-Button
+local DEL_W   = 22   -- Delete-Button
 local GAP     = 8
 
 -- =========================
@@ -710,6 +711,26 @@ local function CreatePrioUIOnce(parent)
     row.cond:SetFrameLevel(row:GetFrameLevel() + 1)
     row.cond:SetScript("OnClick", function()
       ShowCondFrameForEntry(row.entry, row)
+    end)
+
+    -- Delete-Button
+    row.delBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+    row.delBtn:SetText("X")
+    row.delBtn:SetWidth(DEL_W); row.delBtn:SetHeight(18)
+    row.delBtn:SetPoint("LEFT", row.cond, "RIGHT", GAP, 0)
+    row.delBtn:SetFrameLevel(row:GetFrameLevel() + 1)
+    row.delBtn:SetScript("OnClick", function()
+      if not row.entry then return end
+      local idx = nil
+      for k, v in ipairs(SPELL_PRIORITY) do
+        if v == row.entry then idx = k; break end
+      end
+      if idx then
+        table.remove(SPELL_PRIORITY, idx)
+        RenumberPriorities()
+        SaveCurrentConfigSpells()
+        AutoLock:PrioScrollUpdate()
+      end
     end)
 
     rows[i] = row
