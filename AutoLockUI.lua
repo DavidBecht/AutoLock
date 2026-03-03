@@ -52,7 +52,9 @@ local function AutoLockUI_GetFiltered()
   local search     = strlower(AutoLockSearchText or "")
   local typeFilter = AutoLockTypeFilter or "all"
   for _, e in ipairs(SPELL_PRIORITY) do
-    if not AutoLockUI_ShowDisabled and e.enabled == false then
+    if e._deleted then
+      -- skip
+    elseif not AutoLockUI_ShowDisabled and e.enabled == false then
       -- skip
     else
       local passType   = (typeFilter == "all") or (e.type == typeFilter)
@@ -117,10 +119,34 @@ local settingsPanel
 -- kleines Bedingungen-Fenster (einmalig wiederverwendet)
 local condFrame
 
+-- ESC schließt das oberste sichtbare AutoLock-Fenster
+local _origCloseWindows = CloseWindows
+CloseWindows = function()
+  local picker = getglobal("AutoLockSpellPicker")
+  if picker and picker:IsVisible() then
+    picker:Hide()
+    return true
+  end
+  local cond = getglobal("AutoLockConditionFrame")
+  if cond and cond:IsVisible() then
+    cond:Hide()
+    return true
+  end
+  local settings = getglobal("AutoLockSettingsPanel")
+  if settings and settings:IsVisible() then
+    settings:Hide()
+    return true
+  end
+  if frame and frame:IsVisible() then
+    frame:Hide()
+    return true
+  end
+  return _origCloseWindows()
+end
+
 -- Spaltenbreiten
 local GRIP_W  = 22   -- Drag-Handle
-local NAME_W  = 340  -- Spell-Name (breiter durch wegfallende Up/Down-Buttons)
-local PRIO_W  = 44   -- Prio-EditBox
+local NAME_W  = 340  -- Spell-Name
 local REF_W   = 40   -- Refresh-EditBox
 local COND_W  = 56   -- Cond-Button
 local DEL_W   = 22   -- Delete-Button
@@ -136,15 +162,19 @@ local function GetSpellKey(e)
 end
 
 local function GetActiveConfig()
+  -- Gibt den gerade im UI geladenen Config zurück (Vorschau oder Combat-Config)
+  local name = AutoLock._loadedConfigName or (AutoLockDB and AutoLockDB.activeConfig)
   for _, c in ipairs(AutoLockDB.configs) do
-    if c.name == AutoLockDB.activeConfig then return c end
+    if c.name == name then return c end
   end
 end
 
 local function SnapshotSpells()
   local t = {}
   for _, e in ipairs(SPELL_PRIORITY) do
-    t[GetSpellKey(e)] = { enabled=e.enabled, priority=e.priority, refreshtime=e.refreshtime }
+    if not e._deleted then
+      t[GetSpellKey(e)] = { enabled=e.enabled, priority=e.priority, refreshtime=e.refreshtime }
+    end
   end
   return t
 end
@@ -154,18 +184,26 @@ local function SaveCurrentConfigSpells()
   if not cfg then return end
   cfg.spells = {}
   for _, e in ipairs(SPELL_PRIORITY) do
-    cfg.spells[GetSpellKey(e)] = {
-      enabled=e.enabled, priority=e.priority, refreshtime=e.refreshtime,
-      TH_player_hp=e.TH_player_hp,       TH_player_hp_cmp=e.TH_player_hp_cmp,
-      TH_player_mana=e.TH_player_mana,   TH_player_mana_cmp=e.TH_player_mana_cmp,
-      TH_target_hp=e.TH_target_hp,       TH_target_hp_cmp=e.TH_target_hp_cmp,
-      TH_mode=e.TH_mode,
-    }
+    if not e._deleted then
+      cfg.spells[GetSpellKey(e)] = {
+        enabled=e.enabled, priority=e.priority, refreshtime=e.refreshtime,
+        TH_player_hp=e.TH_player_hp,       TH_player_hp_cmp=e.TH_player_hp_cmp,
+        TH_player_mana=e.TH_player_mana,   TH_player_mana_cmp=e.TH_player_mana_cmp,
+        TH_target_hp=e.TH_target_hp,       TH_target_hp_cmp=e.TH_target_hp_cmp,
+        TH_mode=e.TH_mode,
+      }
+    end
+  end
+  -- If the just-saved config is the one bound to the action bar, refresh its snapshot.
+  if AutoLock._combatConfigName == cfg.name then
+    AutoLock:_loadCombatSnapshot(cfg.name)
   end
 end
 
 local function ApplyConfigToSpells(cfg)
+  AutoLock._loadedConfigName = cfg.name
   for _, e in ipairs(SPELL_PRIORITY) do
+    e._deleted = nil  -- reset deletion flag from previous config
     local s = cfg.spells and cfg.spells[GetSpellKey(e)]
     if s then
       e.enabled = s.enabled
@@ -177,8 +215,23 @@ local function ApplyConfigToSpells(cfg)
       e.TH_mode=s.TH_mode
     end
   end
+  if cfg.deletedSpells then
+    for _, e in ipairs(SPELL_PRIORITY) do
+      if cfg.deletedSpells[GetSpellKey(e)] then
+        e._deleted = true
+      end
+    end
+  end
   SortByPriorityNumbers()
   RenumberPriorities()
+end
+
+-- Lädt Config für Anzeige im UI, ändert NICHT AutoLockDB.activeConfig
+local function PreviewConfig(cfg)
+  if not cfg then return end
+  ApplyConfigToSpells(cfg)
+  if scroll then AutoLock:PrioScrollUpdate() end
+  AutoLockRefreshConfigList()
 end
 
 local function LoadConfig(cfg)
@@ -187,6 +240,18 @@ local function LoadConfig(cfg)
   ApplyConfigToSpells(cfg)
   if scroll then AutoLock:PrioScrollUpdate() end
   AutoLockRefreshConfigList()  -- forward ref to global defined below
+end
+
+-- Stellt den aktiven Combat-Config wieder her (z.B. nach UI-Vorschau)
+function AutoLock:_reloadActiveCombatConfig()
+  local name = AutoLockDB and AutoLockDB.activeConfig
+  if not name then return end
+  for _, cfg in ipairs(AutoLockDB.configs) do
+    if cfg.name == name then
+      ApplyConfigToSpells(cfg)
+      return
+    end
+  end
 end
 
 function AutoLock:LoadConfigByName(name)
@@ -429,14 +494,9 @@ function AutoLock:PrioScrollUpdate()
 
       if e.enabled == false then
         row.nameText:SetTextColor(0.5, 0.5, 0.5)
-        row.prioBox:SetTextColor(0.5, 0.5, 0.5)
       else
         row.nameText:SetTextColor(1, 0.82, 0)
-        row.prioBox:SetTextColor(1, 1, 0)
       end
-
-      row.prioBox.settingEntry = e
-      row.prioBox:SetText(tostring(e.priority or idx))
 
       if e.type == "curse" then
         row.refreshBox:Show()
@@ -550,21 +610,17 @@ local function CreatePrioUIOnce(parent)
     dropTargetRow = nil
   end)
 
-  -- ==== Kopfzeile: Name | Prio | Refresh ====
+  -- ==== Kopfzeile: Name | Refresh | Cond ====
   header.name = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   header.name:SetPoint("TOPLEFT", parent, "TOPLEFT", 60, -109)
   header.name:SetText("Name")
 
-  header.prio = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  header.prio:SetPoint("TOPLEFT", parent, "TOPLEFT", 408, -109)
-  header.prio:SetText("Prio")
-
   header.refresh = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  header.refresh:SetPoint("TOPLEFT", parent, "TOPLEFT", 460, -109)
+  header.refresh:SetPoint("TOPLEFT", parent, "TOPLEFT", 408, -109)
   header.refresh:SetText("Refresh (s)")
 
   header.cond = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-  header.cond:SetPoint("TOPLEFT", parent, "TOPLEFT", 508, -109)
+  header.cond:SetPoint("TOPLEFT", parent, "TOPLEFT", 456, -109)
   header.cond:SetText("Cond")
 
   -- ==== ScrollFrame ====
@@ -645,46 +701,11 @@ local function CreatePrioUIOnce(parent)
     row.nameText:SetJustifyH("LEFT")
     row.nameText:SetNonSpaceWrap(false)
 
-    -- Prio-EditBox
-    row.prioBox = CreateFrame("EditBox", nil, row)
-    row.prioBox:SetAutoFocus(false)
-    row.prioBox:SetWidth(PRIO_W); row.prioBox:SetHeight(18)
-    row.prioBox:SetPoint("LEFT", row.nameText, "RIGHT", GAP, 0)
-    row.prioBox:SetFontObject(GameFontHighlightSmall)
-    row.prioBox:SetJustifyH("CENTER")
-    row.prioBox:SetTextInsets(4, 0, 0, 0)
-    row.prioBox:SetBackdrop({
-      bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
-      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-      tile = true, tileSize = 16, edgeSize = 12,
-      insets = { left = 3, right = 3, top = 3, bottom = 3 }
-    })
-    row.prioBox:SetBackdropColor(0, 0, 0, 0.6)
-    row.prioBox:SetScript("OnTextChanged", function()
-      local txt = this:GetText() or ""
-      local clean = string.gsub(txt, "[^0-9]", "")
-      if clean ~= txt then this:SetText(clean) end
-    end)
-    row.prioBox:SetScript("OnEnterPressed", function()
-      local newPos = tonumber(this:GetText())
-      local e = this.settingEntry
-      if not newPos or not e then this:ClearFocus(); return end
-      local fromIdx, total = nil, table.getn(SPELL_PRIORITY)
-      for k, v in ipairs(SPELL_PRIORITY) do if v == e then fromIdx = k; break end end
-      newPos = math.max(1, math.min(newPos, total))
-      if fromIdx and fromIdx ~= newPos then
-        MoveEntry(fromIdx, newPos)
-        AutoLock:PrioScrollUpdate()
-      end
-      this:ClearFocus()
-    end)
-    row.prioBox:SetScript("OnEscapePressed", function() this:ClearFocus() end)
-
     -- Refresh EditBox (nur bei curse sichtbar)
     row.refreshBox = CreateFrame("EditBox", nil, row)
     row.refreshBox:SetAutoFocus(false)
     row.refreshBox:SetWidth(REF_W); row.refreshBox:SetHeight(18)
-    row.refreshBox:SetPoint("LEFT", row.prioBox, "RIGHT", GAP, 0)
+    row.refreshBox:SetPoint("LEFT", row.nameText, "RIGHT", GAP, 0)
     row.refreshBox:SetFontObject(GameFontHighlightSmall)
     row.refreshBox:SetJustifyH("LEFT")
     row.refreshBox:SetTextInsets(4, 0, 0, 0)
@@ -721,16 +742,15 @@ local function CreatePrioUIOnce(parent)
     row.delBtn:SetFrameLevel(row:GetFrameLevel() + 1)
     row.delBtn:SetScript("OnClick", function()
       if not row.entry then return end
-      local idx = nil
-      for k, v in ipairs(SPELL_PRIORITY) do
-        if v == row.entry then idx = k; break end
+      local e = row.entry
+      local cfg = GetActiveConfig()
+      if cfg then
+        if not cfg.deletedSpells then cfg.deletedSpells = {} end
+        cfg.deletedSpells[GetSpellKey(e)] = true
       end
-      if idx then
-        table.remove(SPELL_PRIORITY, idx)
-        RenumberPriorities()
-        SaveCurrentConfigSpells()
-        AutoLock:PrioScrollUpdate()
-      end
+      e._deleted = true
+      SaveCurrentConfigSpells()
+      AutoLock:PrioScrollUpdate()
     end)
 
     rows[i] = row
@@ -767,6 +787,13 @@ function AutoLock:CreateUI()
     insets = { left = 3, right = 3, top = 3, bottom = 3 }
   })
   frame:SetBackdropColor(0,0,0,0.85)
+
+  frame:SetScript("OnHide", function()
+    -- SPELL_PRIORITY könnte durch UI-Vorschau abweichen → Combat-Config wiederherstellen
+    if AutoLock._reloadActiveCombatConfig then
+      AutoLock:_reloadActiveCombatConfig()
+    end
+  end)
 
   local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   title:SetPoint("TOP", frame, "TOP", 0, -8)
@@ -857,22 +884,16 @@ function AutoLock:CreateUI()
     lastFBtn = fb
   end
 
-  local refresh = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-  refresh:SetWidth(90); refresh:SetHeight(20)
-  refresh:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 10, 10)
-  refresh:SetText("Apply")
-  refresh:SetScript("OnClick", function() AutoLock:PrioScrollUpdate() end)
-	
-	local newCofig = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+  local newCofig = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   newCofig:SetWidth(90); newCofig:SetHeight(20)
-  newCofig:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 120, 10)
+  newCofig:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 10, 10)
   newCofig:SetText("New Config")
   newCofig:SetScript("OnClick", function() AutoLockNewConfigFrame:Show() end)
 
   -- ===== Settings button =====
   local settingsBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   settingsBtn:SetWidth(90); settingsBtn:SetHeight(20)
-  settingsBtn:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 230, 10)
+  settingsBtn:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 120, 10)
   settingsBtn:SetText("Settings")
   settingsBtn:SetScript("OnClick", function()
     if settingsPanel and settingsPanel:IsShown() then
@@ -885,7 +906,7 @@ function AutoLock:CreateUI()
   -- ===== Add Spell button =====
   local addSpellBtn = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
   addSpellBtn:SetWidth(80); addSpellBtn:SetHeight(20)
-  addSpellBtn:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 340, 10)
+  addSpellBtn:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 230, 10)
   addSpellBtn:SetText("Add Spell")
   addSpellBtn:SetScript("OnClick", function() AutoLock:ShowSpellPicker() end)
 
@@ -1034,17 +1055,44 @@ local PICKER_ROW_H   = 20
 local PICKER_VISIBLE = 18
 local PICKER_ROW_GAP = 2
 
+local PICKER_SKIP_TABS = {["general"]=true, ["zmounts"]=true, ["zzcompanions"]=true, ["zzzztoys"]=true}
+
+local PICKER_MISC_TAB = -1
+local PICKER_MISC_ENTRIES = {
+  {
+    name="Trinket Slot 1", uitext="Trinket Slot 1", type="trinket",
+    tab=PICKER_MISC_TAB, tabName="Misc", target="target", enabled=false,
+    use=function() UseInventoryItem(13); return true end,
+    condition=function() return AutoLock:IsTrinketReady(13) and UnitExists("target") end,
+  },
+  {
+    name="Trinket Slot 2", uitext="Trinket Slot 2", type="trinket",
+    tab=PICKER_MISC_TAB, tabName="Misc", target="target", enabled=false,
+    use=function() UseInventoryItem(14); return true end,
+    condition=function() return AutoLock:IsTrinketReady(14) and UnitExists("target") end,
+  },
+  {
+    name="Firebolt", uitext="Firebolt (Pet)", type="pet",
+    tab=PICKER_MISC_TAB, tabName="Misc", target="target", enabled=true,
+  },
+}
+
 local function BuildSpellPickerList()
   spellPickerList = {}
   local numTabs = GetNumSpellTabs and GetNumSpellTabs() or 0
   for tab = 1, numTabs do
     local tabName, _, offset, numSpells = GetSpellTabInfo(tab)
-    for s = offset + 1, offset + numSpells do
-      local name, rank = GetSpellName(s, BOOKTYPE_SPELL)
-      if name then
-        table.insert(spellPickerList, {name=name, rank=rank, tab=tab, tabName=tabName or ""})
+    if not PICKER_SKIP_TABS[strlower(tabName or "")] then
+      for s = offset + 1, offset + numSpells do
+        local name, rank = GetSpellName(s, BOOKTYPE_SPELL)
+        if name then
+          table.insert(spellPickerList, {name=name, rank=rank, tab=tab, tabName=tabName or ""})
+        end
       end
     end
+  end
+  for _, e in ipairs(PICKER_MISC_ENTRIES) do
+    table.insert(spellPickerList, e)
   end
 end
 
@@ -1240,27 +1288,71 @@ function AutoLock:ShowSpellPicker()
         AutoLockLog.Warning("Select a spell first.")
         return
       end
-      local spellName = spellPickerSelected.name
-      local spellType = spellPickerFrame.typeSelected
-      for _, e in ipairs(SPELL_PRIORITY) do
-        if e.name == spellName and e.type == spellType then
-          AutoLockLog.Warning(spellName .. " (" .. spellType .. ") is already in the rotation. Check 'Show disabled' in the main list to find it.")
-          return
+      local newEntry
+      if spellPickerSelected.tab == PICKER_MISC_TAB then
+        local sel = spellPickerSelected
+        local displayName = sel.uitext or sel.name
+        for _, e in ipairs(SPELL_PRIORITY) do
+          if e.name == sel.name and e.type == sel.type then
+            if e._deleted then
+              e._deleted = nil
+              local cfg = GetActiveConfig()
+              if cfg and cfg.deletedSpells then cfg.deletedSpells[GetSpellKey(e)] = nil end
+              SaveCurrentConfigSpells()
+              AutoLock:PrioScrollUpdate()
+              AutoLockLog.Info(displayName .. " restored to rotation.")
+            else
+              AutoLockLog.Warning(displayName .. " is already in the rotation.")
+            end
+            return
+          end
         end
+        newEntry = {
+          name      = sel.name,
+          uitext    = sel.uitext,
+          type      = sel.type,
+          target    = sel.target or "target",
+          enabled   = true,
+          priority  = table.getn(SPELL_PRIORITY) + 1,
+          use       = sel.use,
+          condition = sel.condition,
+        }
+      else
+        local spellName = spellPickerSelected.name
+        local spellType = spellPickerFrame.typeSelected
+        for _, e in ipairs(SPELL_PRIORITY) do
+          if e.name == spellName and e.type == spellType then
+            if e._deleted then
+              e._deleted = nil
+              local cfg = GetActiveConfig()
+              if cfg and cfg.deletedSpells then cfg.deletedSpells[GetSpellKey(e)] = nil end
+              SaveCurrentConfigSpells()
+              AutoLock:PrioScrollUpdate()
+              AutoLockLog.Info(spellName .. " restored to rotation.")
+            else
+              AutoLockLog.Warning(spellName .. " (" .. spellType .. ") is already in the rotation. Check 'Show disabled' in the main list to find it.")
+            end
+            return
+          end
+        end
+        newEntry = {
+          name     = spellName,
+          type     = spellType,
+          priority = table.getn(SPELL_PRIORITY) + 1,
+          target   = "target",
+          enabled  = true,
+          uitext   = spellName,
+        }
       end
-      local newEntry = {
-        name     = spellName,
-        type     = spellType,
-        priority = table.getn(SPELL_PRIORITY) + 1,
-        target   = "target",
-        enabled  = true,
-        uitext   = spellName,
-      }
       table.insert(SPELL_PRIORITY, newEntry)
+      local cfg = GetActiveConfig()
+      if cfg and cfg.deletedSpells then
+        cfg.deletedSpells[GetSpellKey(newEntry)] = nil
+      end
       RenumberPriorities()
       SaveCurrentConfigSpells()
       AutoLock:PrioScrollUpdate()
-      AutoLockLog.Info("Added " .. spellName .. " (" .. spellType .. ") to rotation. Total: " .. table.getn(SPELL_PRIORITY))
+      AutoLockLog.Info("Added " .. (newEntry.uitext or newEntry.name) .. " (" .. newEntry.type .. ") to rotation. Total: " .. table.getn(SPELL_PRIORITY))
     end)
   end  -- end one-time frame creation
 
@@ -1285,21 +1377,34 @@ function AutoLock:ShowSpellPicker()
   local numTabs = GetNumSpellTabs and GetNumSpellTabs() or 0
   for tab = 1, numTabs do
     local tabName = GetSpellTabInfo(tab)
-    local shortName = tabName and string.sub(tabName, 1, 9) or ("Tab" .. tab)
-    local tbW = math.max(50, string.len(shortName) * 7 + 14)
-    local tb = CreateFrame("Button", nil, spellPickerFrame.tabArea, "UIPanelButtonTemplate")
-    tb:SetWidth(tbW); tb:SetHeight(18)
-    tb:SetText(shortName)
-    tb:SetPoint("TOPLEFT", spellPickerFrame.tabArea, "TOPLEFT", tabX, 0)
-    local tabIdx = tab
-    tb:SetScript("OnClick", function()
-      spellPickerTabFilter = tabIdx
-      if pickerScroll then FauxScrollFrame_SetOffset(pickerScroll, 0) end
-      PickerScrollUpdate()
-    end)
-    table.insert(spellPickerFrame._tabBtns, tb)
-    tabX = tabX + tbW + 4
+    if not PICKER_SKIP_TABS[strlower(tabName or "")] then
+      local shortName = tabName and string.sub(tabName, 1, 9) or ("Tab" .. tab)
+      local tbW = math.max(50, string.len(shortName) * 7 + 14)
+      local tb = CreateFrame("Button", nil, spellPickerFrame.tabArea, "UIPanelButtonTemplate")
+      tb:SetWidth(tbW); tb:SetHeight(18)
+      tb:SetText(shortName)
+      tb:SetPoint("TOPLEFT", spellPickerFrame.tabArea, "TOPLEFT", tabX, 0)
+      local tabIdx = tab
+      tb:SetScript("OnClick", function()
+        spellPickerTabFilter = tabIdx
+        if pickerScroll then FauxScrollFrame_SetOffset(pickerScroll, 0) end
+        PickerScrollUpdate()
+      end)
+      table.insert(spellPickerFrame._tabBtns, tb)
+      tabX = tabX + tbW + 4
+    end
   end
+
+  local miscBtn = CreateFrame("Button", nil, spellPickerFrame.tabArea, "UIPanelButtonTemplate")
+  miscBtn:SetWidth(50); miscBtn:SetHeight(18)
+  miscBtn:SetText("Misc")
+  miscBtn:SetPoint("TOPLEFT", spellPickerFrame.tabArea, "TOPLEFT", tabX, 0)
+  miscBtn:SetScript("OnClick", function()
+    spellPickerTabFilter = PICKER_MISC_TAB
+    if pickerScroll then FauxScrollFrame_SetOffset(pickerScroll, 0) end
+    PickerScrollUpdate()
+  end)
+  table.insert(spellPickerFrame._tabBtns, miscBtn)
 
   -- Reset state
   if spellPickerFrame.srchBox then spellPickerFrame.srchBox:SetText("") end
@@ -1465,7 +1570,7 @@ local function AutoLockPickupConfigMacro(cfg)
   end
   local macroName = "AL:" .. string.sub(cfg.name, 1, 12)
   local iconIndex  = cfg.icon or 1
-  local macroBody  = '/run AutoLock:LoadConfigByName("'..cfg.name..'");AutoLock:DoAutoLock()'
+  local macroBody  = '/run AutoLock:DoAutoLock("'..cfg.name..'")'
   local id = GetMacroIndexByName(macroName)
   if id and id > 0 then
     pcall(function() EditMacro(id, macroName, iconIndex, macroBody, 1) end)
@@ -1513,14 +1618,19 @@ function AutoLockRefreshConfigList()
     btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     btn:RegisterForDrag("LeftButton")
 
-    local isActive = (AutoLockDB.activeConfig == cfg.name)
+    -- isUIShown: this config is currently displayed in the UI (for editing/viewing)
+    local isUIShown = (AutoLock._loadedConfigName == cfg.name) or
+                      (not AutoLock._loadedConfigName and AutoLockDB.activeConfig == cfg.name)
+    -- isCombatActive: this config is bound to an action bar button and will be executed
+    local isCombatActive = (AutoLock._combatConfigName == cfg.name)
 
+    -- Gold border = UI-selected config
     local borderBg = btn:CreateTexture(nil, "BACKGROUND")
     borderBg:SetWidth(40); borderBg:SetHeight(40)
     borderBg:SetPoint("TOP", btn, "TOP", 0, -1)
     borderBg:SetTexture("Interface\\Tooltips\\UI-Tooltip-Background")
     borderBg:SetVertexColor(1, 0.82, 0, 1)
-    if not isActive then borderBg:Hide() end
+    if not isUIShown then borderBg:Hide() end
 
     local iconTex = btn:CreateTexture(nil, "ARTWORK")
     iconTex:SetWidth(36); iconTex:SetHeight(36)
@@ -1533,7 +1643,7 @@ function AutoLockRefreshConfigList()
       iconResult = "Interface\\Icons\\" .. iconResult
     end
     iconTex:SetTexture(iconResult)
-    if isActive then
+    if isUIShown then
       iconTex:SetVertexColor(1, 1, 1)
     else
       iconTex:SetVertexColor(0.6, 0.6, 0.6)
@@ -1544,7 +1654,12 @@ function AutoLockRefreshConfigList()
     lbl:SetWidth(46); lbl:SetJustifyH("CENTER")
     local short = string.sub(cfg.name, 1, 6)
     if string.len(cfg.name) > 6 then short = short .. ".." end
-    lbl:SetText(short)
+    -- Green dot prefix = combat-active config (bound to action bar button)
+    if isCombatActive then
+      lbl:SetText("|cff00ff00\226\150\182|r" .. short)
+    else
+      lbl:SetText(short)
+    end
 
     btn:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
 
@@ -1553,10 +1668,13 @@ function AutoLockRefreshConfigList()
     btn:SetScript("OnEnter", function()
       GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
       GameTooltip:SetText(cfgRef.name, 1, 0.82, 0)
-      GameTooltip:AddLine("Left-click: Load config", 0.9, 0.9, 0.9)
-      GameTooltip:AddLine("Drag: Place on action bar", 0.9, 0.9, 0.9)
+      GameTooltip:AddLine("Left-click: View in UI", 0.9, 0.9, 0.9)
+      GameTooltip:AddLine("Drag: Bind to action bar", 0.9, 0.9, 0.9)
       GameTooltip:AddLine("Right-click: Edit", 0.9, 0.9, 0.9)
       GameTooltip:AddLine("Shift + right-click: Delete", 0.9, 0.9, 0.9)
+      if AutoLock._combatConfigName == cfgRef.name then
+        GameTooltip:AddLine("[Active combat config]", 0, 1, 0)
+      end
       GameTooltip:Show()
     end)
     btn:SetScript("OnLeave", function()
@@ -1578,7 +1696,7 @@ function AutoLockRefreshConfigList()
         end
       else  -- LeftButton
         if not shift then
-          LoadConfig(cfgRef)
+          PreviewConfig(cfgRef)
         end
       end
     end)
@@ -1603,12 +1721,17 @@ StaticPopupDialogs["AUTOLOCK_DELETE_CONFIG"] = {
     end
     AutoLockDB.configs = newList
     if AutoLockDB.activeConfig == cfg.name then
+      -- Combat-Config gelöscht → ersten verfügbaren laden
       if table.getn(AutoLockDB.configs) > 0 then
         LoadConfig(AutoLockDB.configs[1])
       else
         AutoLockDB.activeConfig = nil
+        AutoLock._loadedConfigName = nil
         AutoLockRefreshConfigList()
       end
+    elseif AutoLock._loadedConfigName == cfg.name then
+      -- Vorgeschauter Config gelöscht → auf Combat-Config zurück
+      AutoLock:LoadConfigByName(AutoLockDB.activeConfig)
     else
       AutoLockRefreshConfigList()
     end
@@ -1639,6 +1762,9 @@ function AutoLockNewConfigPopup_Save()
     end
     if AutoLockDB.activeConfig == AutoLockEditingConfig.name then
       AutoLockDB.activeConfig = name
+    end
+    if AutoLock._loadedConfigName == AutoLockEditingConfig.name then
+      AutoLock._loadedConfigName = name
     end
     AutoLockEditingConfig.name = name
     AutoLockEditingConfig.icon = AutoLockSelectedIcon or AutoLockEditingConfig.icon
@@ -1679,6 +1805,9 @@ function AutoLock:InitConfigs()
     AutoLockDB.activeConfig = "Default"
   end
   local cfg = GetActiveConfig()
-  if cfg then ApplyConfigToSpells(cfg) end
+  if cfg then
+    ApplyConfigToSpells(cfg)
+    self:_loadCombatSnapshot(cfg.name)
+  end
 end
 
