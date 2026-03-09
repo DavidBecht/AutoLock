@@ -501,7 +501,7 @@ function AutoLock:PrioScrollUpdate()
         row.nameText:SetTextColor(1, 0.82, 0)
       end
 
-      if e.name == "Dark Harvest" then
+      if e.name == "Dark Harvest" or e.name == "Drain Soul" then
         row.cfgBtn:Show()
       else
         row.cfgBtn:Hide()
@@ -609,6 +609,79 @@ local function ShowDHDotsPopup(anchor)
   dhDotsPopup.shadowVulnCheck:SetChecked(dh.shadowVuln and 1 or nil)
 
   dhDotsPopup:Show()
+end
+
+-- =========================
+-- Drain Soul DoTs Popup
+-- =========================
+local dsDotsPopup = nil
+
+local function ShowDSDotsPopup(anchor)
+  if not dsDotsPopup then
+    dsDotsPopup = CreateFrame("Frame", "AutoLockDSDotsPopup", UIParent)
+    dsDotsPopup:SetWidth(220); dsDotsPopup:SetHeight(148)
+    dsDotsPopup:SetFrameStrata("TOOLTIP")
+    dsDotsPopup:SetBackdrop({
+      bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+      edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+      tile = true, tileSize = 32, edgeSize = 16,
+      insets = { left = 5, right = 5, top = 5, bottom = 5 }
+    })
+    dsDotsPopup:SetBackdropColor(0.1, 0.1, 0.15, 1)
+    dsDotsPopup:EnableMouse(true)
+
+    local title = dsDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    title:SetPoint("TOP", dsDotsPopup, "TOP", 0, -10)
+    title:SetText("Drain Soul requires DoTs:")
+
+    local closeBtn = CreateFrame("Button", nil, dsDotsPopup, "UIPanelCloseButton")
+    closeBtn:SetWidth(18); closeBtn:SetHeight(18)
+    closeBtn:SetPoint("TOPRIGHT", dsDotsPopup, "TOPRIGHT", -2, -2)
+    closeBtn:SetScript("OnClick", function() dsDotsPopup:Hide() end)
+
+    local function makeDSCheck(key, label, prevAnchor)
+      local cb = CreateFrame("CheckButton", nil, dsDotsPopup, "UICheckButtonTemplate")
+      cb:SetWidth(18); cb:SetHeight(18)
+      if prevAnchor then
+        cb:SetPoint("TOPLEFT", prevAnchor, "BOTTOMLEFT", 0, -6)
+      else
+        cb:SetPoint("TOPLEFT", dsDotsPopup, "TOPLEFT", 10, -30)
+      end
+      cb:SetScript("OnClick", function()
+        local cfg = GetActiveConfig()
+        if not cfg then return end
+        if not cfg.drainSoulDots then cfg.drainSoulDots = {} end
+        local newVal = not (cfg.drainSoulDots[key] == true)
+        cfg.drainSoulDots[key] = newVal
+        cb:SetChecked(newVal and 1 or nil)
+      end)
+      local lbl = dsDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+      lbl:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+      lbl:SetText(label)
+      cb._key = key
+      return cb
+    end
+
+    dsDotsPopup.agonyCheck      = makeDSCheck("agony",      "Curse of Agony",  nil)
+    dsDotsPopup.corruptionCheck = makeDSCheck("corruption", "Corruption",       dsDotsPopup.agonyCheck)
+    dsDotsPopup.siphonCheck     = makeDSCheck("siphonLife", "Siphon Life",      dsDotsPopup.corruptionCheck)
+  end
+
+  if dsDotsPopup:IsShown() and dsDotsPopup.anchor == anchor then
+    dsDotsPopup:Hide()
+    return
+  end
+  dsDotsPopup.anchor = anchor
+  dsDotsPopup:ClearAllPoints()
+  dsDotsPopup:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, 4)
+
+  local cfg = GetActiveConfig()
+  local ds = (cfg and cfg.drainSoulDots) or {}
+  dsDotsPopup.agonyCheck:SetChecked(ds.agony      and 1 or nil)
+  dsDotsPopup.corruptionCheck:SetChecked(ds.corruption and 1 or nil)
+  dsDotsPopup.siphonCheck:SetChecked(ds.siphonLife and 1 or nil)
+
+  dsDotsPopup:Show()
 end
 
 local function CreatePrioUIOnce(parent)
@@ -829,8 +902,11 @@ local function CreatePrioUIOnce(parent)
     row.cfgBtn:SetPoint("LEFT", row.cond, "RIGHT", GAP, 0)
     row.cfgBtn:SetFrameLevel(row:GetFrameLevel() + 1)
     row.cfgBtn:SetScript("OnClick", function()
-      if row.entry and row.entry.name == "Dark Harvest" then
+      if not row.entry then return end
+      if row.entry.name == "Dark Harvest" then
         ShowDHDotsPopup(row.cfgBtn)
+      elseif row.entry.name == "Drain Soul" then
+        ShowDSDotsPopup(row.cfgBtn)
       end
     end)
     row.cfgBtn:Hide()
@@ -908,10 +984,15 @@ function AutoLock:CreateUI()
   end)
 
   frame:SetScript("OnHide", function()
-    -- ESC-Priorität: wenn DH-Popup offen ist, nur diesen schließen
+    -- ESC-Priorität: offene Spell-Popups zuerst schließen
     if dhDotsPopup and dhDotsPopup:IsShown() then
       frame:Show()
       dhDotsPopup:Hide()
+      return
+    end
+    if dsDotsPopup and dsDotsPopup:IsShown() then
+      frame:Show()
+      dsDotsPopup:Hide()
       return
     end
     -- SPELL_PRIORITY könnte durch UI-Vorschau abweichen → Combat-Config wiederherstellen

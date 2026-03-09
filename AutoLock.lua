@@ -186,6 +186,36 @@ local DARK_HARVEST_DEBUFF_NAMES = {
   shadowVuln = "Shadow Vulnerability",
 }
 
+-- Curse names checked for Drain Soul (same Cursive-tracked set, no Shadow Vuln)
+local DRAIN_SOUL_CURSE_NAMES = {
+  agony      = "curse of agony",
+  corruption = "corruption",
+  siphonLife = "siphon life",
+}
+
+local function drainSoulDotsReady()
+  local req = nil
+  local combatName = AutoLock._combatConfigName or (AutoLockDB and AutoLockDB.activeConfig)
+  if combatName and AutoLockDB and AutoLockDB.configs then
+    for _, c in ipairs(AutoLockDB.configs) do
+      if c.name == combatName then
+        req = c.drainSoulDots
+        break
+      end
+    end
+  end
+  if not req then return true end
+  local _, targetGuid = UnitExists("target")
+  for key, curseName in pairs(DRAIN_SOUL_CURSE_NAMES) do
+    if req[key] then
+      if not Cursive or not Cursive.curses:HasCurse(curseName, targetGuid, 0) then
+        return false
+      end
+    end
+  end
+  return true
+end
+
 local function darkHarvestDotsReady()
   local req = nil
   local combatName = AutoLock._combatConfigName or (AutoLockDB and AutoLockDB.activeConfig)
@@ -514,14 +544,15 @@ SPELL_PRIORITY = {
 		end,
 	},
 	
-	{ name = "Drain Soul",         
-		type = "cast", 
-		priority = 23,  
-		target = "target", 
-		enabled = true, 
+	{ name = "Drain Soul",
+		type = "cast",
+		priority = 23,
+		target = "target",
+		enabled = true,
 		condition = function(unit)
 			if MovementEvents and MovementEvents:IsMoving() then return false end
-			return drainSoulChannelingFinished()
+			if not drainSoulChannelingFinished() then return false end
+			return drainSoulDotsReady()
 		end,
 	},
 
