@@ -145,6 +145,48 @@ def_suite("darkHarvestDotsReady", function()
 end)
 
 -- =============================================================
+-- Suite 3b: isBlockedByDrainSoul logic (pure Lua, no WoW API)
+-- Curses are suppressed DURING drain soul channel if configured.
+-- =============================================================
+def_suite("isBlockedByDrainSoul", function()
+  -- Simulates: isBlockedByDrainSoul(key, channeling, drainSoulDots)
+  local function blocked(key, channeling, dots)
+    if not channeling then return false end
+    if not dots then return false end
+    return dots[key] == true
+  end
+
+  -- not channeling -> never blocked regardless of config
+  is_false(blocked("agony",      false, { agony=true }),      "not channeling -> not blocked")
+  is_false(blocked("corruption", false, { corruption=true }), "not channeling -> not blocked")
+  is_false(blocked("siphonLife", false, { siphonLife=true }), "not channeling -> not blocked")
+
+  -- channeling, no config -> not blocked
+  is_false(blocked("agony", true, nil), "channeling, nil config -> not blocked")
+  is_false(blocked("agony", true, {}),  "channeling, empty config -> not blocked")
+
+  -- channeling + key=true -> blocked
+  is_true(blocked("agony",      true, { agony=true }),      "agony blocked during DS")
+  is_true(blocked("corruption", true, { corruption=true }), "corruption blocked during DS")
+  is_true(blocked("siphonLife", true, { siphonLife=true }), "siphonLife blocked during DS")
+
+  -- channeling + key=false -> not blocked
+  is_false(blocked("agony", true, { agony=false }), "agony=false -> not blocked")
+
+  -- other key not in config -> not blocked
+  is_false(blocked("corruption", true, { agony=true }), "different key -> not blocked")
+
+  -- all three blocked
+  local allDots = { agony=true, corruption=true, siphonLife=true }
+  is_true(blocked("agony",      true, allDots), "all blocked: agony")
+  is_true(blocked("corruption", true, allDots), "all blocked: corruption")
+  is_true(blocked("siphonLife", true, allDots), "all blocked: siphonLife")
+
+  -- DS itself has no blocking config (no shadowVuln key)
+  is_false(blocked("shadowVuln", true, allDots), "shadowVuln not in DS config")
+end)
+
+-- =============================================================
 -- Suite 4: GetSpellKey
 -- =============================================================
 def_suite("getSpellKey", function()

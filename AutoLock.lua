@@ -186,34 +186,18 @@ local DARK_HARVEST_DEBUFF_NAMES = {
   shadowVuln = "Shadow Vulnerability",
 }
 
--- Curse names checked for Drain Soul (same Cursive-tracked set, no Shadow Vuln)
-local DRAIN_SOUL_CURSE_NAMES = {
-  agony      = "curse of agony",
-  corruption = "corruption",
-  siphonLife = "siphon life",
-}
-
-local function drainSoulDotsReady()
-  local req = nil
+-- Returns true if the given curse key (agony/corruption/siphonLife) is configured
+-- to be suppressed while Drain Soul is channeling.
+local function isBlockedByDrainSoul(key)
+  if not DrainSoulChanneling then return false end
   local combatName = AutoLock._combatConfigName or (AutoLockDB and AutoLockDB.activeConfig)
-  if combatName and AutoLockDB and AutoLockDB.configs then
-    for _, c in ipairs(AutoLockDB.configs) do
-      if c.name == combatName then
-        req = c.drainSoulDots
-        break
-      end
+  if not combatName or not AutoLockDB or not AutoLockDB.configs then return false end
+  for _, c in ipairs(AutoLockDB.configs) do
+    if c.name == combatName then
+      return c.drainSoulDots and c.drainSoulDots[key] == true
     end
   end
-  if not req then return true end
-  local _, targetGuid = UnitExists("target")
-  for key, curseName in pairs(DRAIN_SOUL_CURSE_NAMES) do
-    if req[key] then
-      if not Cursive or not Cursive.curses:HasCurse(curseName, targetGuid, 0) then
-        return false
-      end
-    end
-  end
-  return true
+  return false
 end
 
 local function darkHarvestDotsReady()
@@ -438,16 +422,18 @@ SPELL_PRIORITY = {
 
   
 	{ name = "Curse of Shadow", type = "curse", priority = 6, refreshtime = 0, target = "target", enabled = true },
-  { name = "Curse of Agony",  type = "curse", priority = 7, refreshtime = 0, target = "target", enabled = true },
-  { name = "Corruption",      type = "curse", priority = 8, refreshtime = 0, target = "target", enabled = true },
-  { name = "Siphon Life",     
-		type = "curse", 
-		priority = 9, 
-		refreshtime = 0, 
-		target = "target", 
-		enabled = true, 
+  { name = "Curse of Agony",  type = "curse", priority = 7, refreshtime = 0, target = "target", enabled = true,
+    condition = function(unit) return not isBlockedByDrainSoul("agony") end },
+  { name = "Corruption",      type = "curse", priority = 8, refreshtime = 0, target = "target", enabled = true,
+    condition = function(unit) return not isBlockedByDrainSoul("corruption") end },
+  { name = "Siphon Life",
+		type = "curse",
+		priority = 9,
+		refreshtime = 0,
+		target = "target",
+		enabled = true,
 		condition = function(unit)
-			return drainSoulChannelingFinished()
+			return not isBlockedByDrainSoul("siphonLife")
 		end
 	},
 
@@ -551,8 +537,7 @@ SPELL_PRIORITY = {
 		enabled = true,
 		condition = function(unit)
 			if MovementEvents and MovementEvents:IsMoving() then return false end
-			if not drainSoulChannelingFinished() then return false end
-			return drainSoulDotsReady()
+			return drainSoulChannelingFinished()
 		end,
 	},
 
