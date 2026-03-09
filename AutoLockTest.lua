@@ -1,276 +1,213 @@
 -- AutoLockTest.lua
 -- Unit tests for AutoLock addon.
--- Run in-game:  /run AutoLock:RunTests()
--- Or test a single suite: /run AutoLock:RunTests("toggle")
+-- Run in-game: /run AutoLockTests()
+-- Single suite: /run AutoLockTests("toggle")
 
 -- =============================================================
--- Micro test framework
+-- Micro test framework (all state local to this file)
 -- =============================================================
-local _suite = {}
-local _results = {}
+local AL_PASS = 0
+local AL_FAIL = 0
+local AL_RESULTS = {}
 
-local function suite(name, fn)
-  _suite[name] = fn
+local function T_ok(label)
+  table.insert(AL_RESULTS, "|cff00cc00[PASS]|r " .. tostring(label))
+  AL_PASS = AL_PASS + 1
 end
 
-local function assertEqual(actual, expected, label)
-  if actual == expected then
-    table.insert(_results, { ok=true,  label=label })
-  else
-    table.insert(_results, { ok=false, label=label,
-      msg="expected "..tostring(expected).." got "..tostring(actual) })
-  end
+local function T_fail(label, extra)
+  table.insert(AL_RESULTS, "|cffff4444[FAIL]|r " .. tostring(label)
+    .. (extra and (" | " .. tostring(extra)) or ""))
+  AL_FAIL = AL_FAIL + 1
 end
 
-local function assertTrue(val, label)
-  assertEqual(not not val, true, label)
+local function eq(a, b, label)
+  if a == b then T_ok(label)
+  else T_fail(label, "expected="..tostring(b).." got="..tostring(a)) end
 end
 
-local function assertFalse(val, label)
-  assertEqual(not not val, false, label)
+local function is_true(v, label)
+  if v then T_ok(label) else T_fail(label, "expected true") end
 end
 
-local function assertNil(val, label)
-  assertEqual(val, nil, label)
+local function is_false(v, label)
+  if not v then T_ok(label) else T_fail(label, "expected false") end
+end
+
+local function is_nil(v, label)
+  if v == nil then T_ok(label) else T_fail(label, "expected nil, got "..tostring(v)) end
 end
 
 -- =============================================================
--- Suite 1: spell-enable toggle (the core fix)
+-- Suites stored by name
 -- =============================================================
-suite("toggle", function()
-  -- nil → true (first click on default-disabled spell)
+local SUITES = {}
+
+local function def_suite(name, fn)
+  SUITES[name] = fn
+end
+
+-- =============================================================
+-- Suite 1: spell-enable toggle
+-- =============================================================
+def_suite("toggle", function()
+  -- nil -> true (first click, spell starts disabled)
   local e = { enabled = nil }
   e.enabled = not (e.enabled == true)
-  assertEqual(e.enabled, true, "toggle nil→true")
+  eq(e.enabled, true, "toggle nil->true")
 
-  -- true → false
+  -- true -> false
   e.enabled = not (e.enabled == true)
-  assertEqual(e.enabled, false, "toggle true→false")
+  eq(e.enabled, false, "toggle true->false")
 
-  -- false → true
+  -- false -> true
   e.enabled = not (e.enabled == true)
-  assertEqual(e.enabled, true, "toggle false→true")
+  eq(e.enabled, true, "toggle false->true")
 
-  -- second true→false round-trip
+  -- second cycle
   e.enabled = not (e.enabled == true)
-  assertEqual(e.enabled, false, "toggle true→false (2nd)")
+  eq(e.enabled, false, "toggle true->false (2nd)")
 end)
 
 -- =============================================================
--- Suite 2: darkHarvestDots storage on config object
+-- Suite 2: darkHarvestDots stored on cfg object
 -- =============================================================
-suite("darkHarvestDots", function()
-  -- Simulate: user opens popup, clicks siphonLife
-  local cfg = { name="Test", spells={} }
+def_suite("darkHarvestDots", function()
+  local cfg = { name = "Test", spells = {} }
 
-  assertNil(cfg.darkHarvestDots, "darkHarvestDots initially nil")
+  is_nil(cfg.darkHarvestDots, "darkHarvestDots initially nil")
 
-  -- First click: nil → true
+  -- simulate first OnClick (nil -> true)
   if not cfg.darkHarvestDots then cfg.darkHarvestDots = {} end
   local key = "siphonLife"
   local newVal = not (cfg.darkHarvestDots[key] == true)
   cfg.darkHarvestDots[key] = newVal
-  assertEqual(cfg.darkHarvestDots.siphonLife, true, "siphonLife set to true")
+  eq(cfg.darkHarvestDots.siphonLife, true, "siphonLife set to true")
 
-  -- Simulate SaveCurrentConfigSpells: rebuilds cfg.spells, must NOT touch darkHarvestDots
-  local savedDH = cfg.darkHarvestDots    -- defensive copy (as in real code, we don't rebuild it)
-  cfg.spells = {}                         -- simulates cfg.spells = {} in SaveCurrentConfigSpells
-  assertEqual(cfg.darkHarvestDots, savedDH, "darkHarvestDots survives SaveCurrentConfigSpells")
-  assertEqual(cfg.darkHarvestDots.siphonLife, true, "siphonLife still true after save")
+  -- simulate SaveCurrentConfigSpells: only cfg.spells is rebuilt
+  cfg.spells = {}
+  eq(cfg.darkHarvestDots.siphonLife, true, "siphonLife survives cfg.spells = {}")
 
-  -- Second click: true → false (uncheck)
+  -- uncheck (true -> false)
   newVal = not (cfg.darkHarvestDots[key] == true)
   cfg.darkHarvestDots[key] = newVal
-  assertEqual(cfg.darkHarvestDots.siphonLife, false, "siphonLife toggled to false")
+  eq(cfg.darkHarvestDots.siphonLife, false, "siphonLife toggled to false")
 
-  -- SetChecked mapping: false should show as unchecked (nil)
-  local setCheckedArg = cfg.darkHarvestDots.siphonLife and 1 or nil
-  assertNil(setCheckedArg, "SetChecked(nil) for false value")
+  -- SetChecked arg for false: should be nil
+  local setArg = cfg.darkHarvestDots.siphonLife and 1 or nil
+  is_nil(setArg, "SetChecked(nil) for false")
 
-  -- SetChecked mapping: re-enable
-  cfg.darkHarvestDots.siphonLife = true
-  setCheckedArg = cfg.darkHarvestDots.siphonLife and 1 or nil
-  assertEqual(setCheckedArg, 1, "SetChecked(1) for true value")
+  -- re-check (false -> true)
+  newVal = not (cfg.darkHarvestDots[key] == true)
+  cfg.darkHarvestDots[key] = newVal
+  setArg = cfg.darkHarvestDots.siphonLife and 1 or nil
+  eq(setArg, 1, "SetChecked(1) for true")
 end)
 
 -- =============================================================
--- Suite 3: darkHarvestDotsReady logic (mocked AutoLockDB)
+-- Suite 3: darkHarvestDotsReady logic (pure Lua, no WoW API)
 -- =============================================================
-suite("darkHarvestDotsReady", function()
-  -- We can't call the local function directly, but we can test the exact
-  -- logic pattern it uses. Any change to darkHarvestDotsReady() must be
-  -- reflected here.
-
-  local function simulateDotsReady(req, cursiveHas, debuffOn)
-    -- req: table like { agony=true, corruption=false, shadowVuln=true }
-    -- cursiveHas: function(curseName) → bool
-    -- debuffOn: function(debuffName) → bool
+def_suite("darkHarvestDotsReady", function()
+  local function dotsReady(req, cursiveHas, debuffOn)
     if not req then return true end
-
-    local CURSE_NAMES = {
-      agony      = "curse of agony",
-      corruption = "corruption",
-      siphonLife = "siphon life",
-    }
-    local DEBUFF_NAMES = {
-      shadowVuln = "Shadow Vulnerability",
-    }
-
-    for key, curseName in pairs(CURSE_NAMES) do
-      if req[key] then
-        if not cursiveHas(curseName) then return false end
+    local CURSES  = { agony="curse of agony", corruption="corruption", siphonLife="siphon life" }
+    local DEBUFFS = { shadowVuln="Shadow Vulnerability" }
+    for k, name in pairs(CURSES) do
+      if req[k] then
+        if not cursiveHas(name) then return false end
       end
     end
-    for key, debuffName in pairs(DEBUFF_NAMES) do
-      if req[key] then
-        if not debuffOn(debuffName) then return false end
+    for k, name in pairs(DEBUFFS) do
+      if req[k] then
+        if not debuffOn(name) then return false end
       end
     end
     return true
   end
 
-  local allPresent = function(_) return true end
-  local nonePresent = function(_) return false end
+  local YES = function(_) return true  end
+  local NO  = function(_) return false end
 
-  -- No requirements → always ready
-  assertTrue(simulateDotsReady(nil, allPresent, allPresent),
-    "nil req → ready")
-  assertTrue(simulateDotsReady({}, allPresent, allPresent),
-    "empty req → ready")
+  is_true (dotsReady(nil,  YES, YES), "nil req -> ready")
+  is_true (dotsReady({},   YES, YES), "empty req -> ready")
+  is_true (dotsReady({ agony=true }, YES, YES), "agony required+present")
+  is_false(dotsReady({ agony=true }, NO,  YES), "agony required+missing")
+  is_true (dotsReady({ agony=true, corruption=false }, YES, YES), "corruption=false skipped")
+  is_true (dotsReady({ shadowVuln=true }, YES, YES), "shadowVuln required+present")
+  is_false(dotsReady({ shadowVuln=true }, YES, NO),  "shadowVuln required+missing")
 
-  -- Agony required and present
-  assertTrue(simulateDotsReady({ agony=true }, allPresent, allPresent),
-    "agony required+present → ready")
+  local noSiphon = function(n) return n ~= "siphon life" end
+  is_false(dotsReady({ agony=true, siphonLife=true }, noSiphon, YES), "siphonLife missing")
 
-  -- Agony required but missing
-  assertFalse(simulateDotsReady({ agony=true }, nonePresent, allPresent),
-    "agony required+missing → not ready")
-
-  -- Corruption not required → don't block even if absent
-  assertTrue(simulateDotsReady({ agony=true, corruption=false }, allPresent, allPresent),
-    "corruption=false skipped")
-
-  -- shadowVuln required and present
-  assertTrue(simulateDotsReady({ shadowVuln=true }, allPresent, allPresent),
-    "shadowVuln required+present → ready")
-
-  -- shadowVuln required but missing
-  assertFalse(simulateDotsReady({ shadowVuln=true }, allPresent, nonePresent),
-    "shadowVuln required+missing → not ready")
-
-  -- All four required; three present, one missing
-  local partialCurse = function(n) return n ~= "siphon life" end
-  assertFalse(simulateDotsReady(
+  is_true(dotsReady(
     { agony=true, corruption=true, siphonLife=true, shadowVuln=true },
-    partialCurse, allPresent),
-    "siphonLife missing → not ready")
-
-  -- All four required and all present
-  assertTrue(simulateDotsReady(
-    { agony=true, corruption=true, siphonLife=true, shadowVuln=true },
-    allPresent, allPresent),
-    "all required+all present → ready")
+    YES, YES), "all required+present")
 end)
 
 -- =============================================================
--- Suite 4: GetSpellKey logic
+-- Suite 4: GetSpellKey
 -- =============================================================
-suite("getSpellKey", function()
-  local function GetSpellKey(e)
+def_suite("getSpellKey", function()
+  local function key(e)
     return (e.uitext or e.name or "?") .. "|" .. (e.type or "?")
   end
 
-  assertEqual(GetSpellKey({ name="Shadow Bolt", type="cast" }),
-    "Shadow Bolt|cast", "normal spell key")
-
-  assertEqual(GetSpellKey({ name="Siphon Life", type="curse" }),
-    "Siphon Life|curse", "curse key")
-
-  -- uitext overrides name
-  assertEqual(GetSpellKey({ name="Shadow Bolt", type="cast",
-    uitext="Shadow Trance (Shadow Bolt)" }),
-    "Shadow Trance (Shadow Bolt)|cast", "uitext overrides name")
-
-  -- missing name and type
-  assertEqual(GetSpellKey({}), "?|?", "empty entry key")
-
-  -- nil name, has type
-  assertEqual(GetSpellKey({ type="pet" }), "?|pet", "nil name key")
+  eq(key({ name="Shadow Bolt", type="cast" }),  "Shadow Bolt|cast",  "normal spell")
+  eq(key({ name="Siphon Life", type="curse" }), "Siphon Life|curse", "curse")
+  eq(key({ name="Shadow Bolt", type="cast", uitext="Shadow Trance (Shadow Bolt)" }),
+     "Shadow Trance (Shadow Bolt)|cast", "uitext overrides name")
+  eq(key({}),            "?|?",   "empty entry")
+  eq(key({ type="pet" }), "?|pet", "nil name")
 end)
 
 -- =============================================================
--- Suite 5: config system logic (no WoW API needed)
+-- Suite 5: config system name tracking
 -- =============================================================
-suite("configSystem", function()
-  -- Simulate the three-config-name variables
-  local loadedName   = "ConfigA"
-  local activeConfig = "ConfigA"
-  local combatName   = nil
+def_suite("configSystem", function()
+  local configs = {
+    { name="ConfigA", spells={}, darkHarvestDots={ siphonLife=true } },
+    { name="ConfigB", spells={} },
+  }
 
-  -- GetActiveConfig simulation
-  local function getActive(configs)
-    local name = loadedName or activeConfig
+  local function getActive(loadedName, activeName)
+    local name = loadedName or activeName
     for _, c in ipairs(configs) do
       if c.name == name then return c end
     end
   end
 
-  local configs = {
-    { name="ConfigA", spells={}, darkHarvestDots={siphonLife=true} },
-    { name="ConfigB", spells={} },
-  }
+  -- normal lookup
+  local cfg = getActive("ConfigA", "ConfigA")
+  eq(cfg and cfg.name, "ConfigA", "getActive returns ConfigA")
+  eq(cfg and cfg.darkHarvestDots and cfg.darkHarvestDots.siphonLife, true, "ConfigA has siphonLife")
 
-  -- Should return ConfigA
-  local cfg = getActive(configs)
-  assertEqual(cfg and cfg.name, "ConfigA", "getActive returns loadedName config")
-  assertEqual(cfg.darkHarvestDots.siphonLife, true, "ConfigA has siphonLife set")
+  -- switch preview to ConfigB
+  cfg = getActive("ConfigB", "ConfigA")
+  eq(cfg and cfg.name, "ConfigB", "preview returns ConfigB")
+  is_nil(cfg and cfg.darkHarvestDots, "ConfigB has no darkHarvestDots")
 
-  -- Switch preview to ConfigB; darkHarvestDots on ConfigA must be intact
-  loadedName = "ConfigB"
-  cfg = getActive(configs)
-  assertEqual(cfg and cfg.name, "ConfigB", "getActive returns ConfigB after switch")
-  assertNil(cfg.darkHarvestDots, "ConfigB has no darkHarvestDots")
+  -- ConfigA's darkHarvestDots must be intact
+  eq(configs[1].darkHarvestDots.siphonLife, true, "ConfigA darkHarvestDots intact after switch")
 
-  -- ConfigA's darkHarvestDots must still be there
-  local cfgA = configs[1]
-  assertEqual(cfgA.darkHarvestDots.siphonLife, true,
-    "ConfigA darkHarvestDots survives preview switch")
-
-  -- Simulate _reloadActiveCombatConfig: restore loadedName to saved value
-  local savedName = loadedName  -- "ConfigB"
-  -- (ApplyConfigToSpells runs on activeConfig = "ConfigA")
-  loadedName = "ConfigA"        -- temporarily changed inside ApplyConfigToSpells
-  loadedName = savedName        -- restored at end of _reloadActiveCombatConfig
-  assertEqual(loadedName, "ConfigB", "loadedName restored after _reloadActiveCombatConfig")
-
-  -- After reopen: getActive returns ConfigB (the preview config)
-  cfg = getActive(configs)
-  assertEqual(cfg and cfg.name, "ConfigB", "ConfigB still loaded after reopen")
+  -- simulate _reloadActiveCombatConfig: savedName/restore pattern
+  local loadedName = "ConfigB"
+  local savedName  = loadedName    -- "ConfigB"
+  loadedName = "ConfigA"           -- ApplyConfigToSpells sets _loadedConfigName = activeConfig.name
+  loadedName = savedName           -- restored
+  eq(loadedName, "ConfigB", "loadedName restored after _reloadActiveCombatConfig")
 end)
 
 -- =============================================================
--- Suite 6: HasDebuffByName logic (mock SuperWoW API)
+-- Suite 6: HasDebuffByName logic (mocked SuperWoW)
 -- =============================================================
-suite("hasDebuffByName", function()
-  -- We test the pure logic, mocking SpellInfo and UnitDebuff/UnitExists.
-  local function simulateHasDebuff(debuffs, targetSpellName)
-    -- debuffs: list of { spellID=N, name="X" }
-    local spellInfoMap = {}
-    for _, d in ipairs(debuffs) do spellInfoMap[d.spellID] = d.name end
-
-    local function mockSpellInfo(id) return spellInfoMap[id] end
-    local function mockUnitDebuff(guid, i)
-      local d = debuffs[i]
-      if d then return nil, nil, nil, d.spellID end
-      return nil
-    end
-    local guid = "GUID-0001"
-
-    for i = 1, 40 do
-      local _, _, _, spellID = mockUnitDebuff(guid, i)
-      if spellID then
-        local name = mockSpellInfo(spellID)
-        if name == targetSpellName then return true end
+def_suite("hasDebuffByName", function()
+  local function hasDebuff(debuffs, target)
+    local idToName = {}
+    for _, d in ipairs(debuffs) do idToName[d.id] = d.name end
+    for i = 1, table.getn(debuffs) do
+      local id = debuffs[i].id
+      if id then
+        if idToName[id] == target then return true end
       else
         break
       end
@@ -278,86 +215,69 @@ suite("hasDebuffByName", function()
     return false
   end
 
-  local testDebuffs = {
-    { spellID=1, name="Curse of Agony" },
-    { spellID=2, name="Shadow Vulnerability" },
-    { spellID=3, name="Corruption" },
+  local list = {
+    { id=1, name="Curse of Agony" },
+    { id=2, name="Shadow Vulnerability" },
+    { id=3, name="Corruption" },
   }
 
-  assertTrue(simulateHasDebuff(testDebuffs, "Shadow Vulnerability"),
-    "finds Shadow Vulnerability by name")
-  assertTrue(simulateHasDebuff(testDebuffs, "Curse of Agony"),
-    "finds Curse of Agony by name")
-  assertFalse(simulateHasDebuff(testDebuffs, "Siphon Life"),
-    "returns false when debuff absent")
-  assertFalse(simulateHasDebuff({}, "Shadow Vulnerability"),
-    "returns false on empty debuff list")
+  is_true (hasDebuff(list, "Shadow Vulnerability"), "finds Shadow Vulnerability")
+  is_true (hasDebuff(list, "Curse of Agony"),       "finds Curse of Agony")
+  is_false(hasDebuff(list, "Siphon Life"),           "absent debuff -> false")
+  is_false(hasDebuff({},   "Shadow Vulnerability"),  "empty list -> false")
 end)
 
 -- =============================================================
 -- Suite 7: SanitizeNumberText logic
 -- =============================================================
-suite("sanitizeNumber", function()
-  -- Inline the same logic as SanitizeNumberText in AutoLockUI.lua
-  local function sanitize(s)
+def_suite("sanitizeNumber", function()
+  local function san(s)
     s = tostring(s or "")
     s = string.gsub(s, ",", ".")
     s = string.gsub(s, "[^0-9%.]", "")
-    local firstDot = string.find(s, "%.")
-    if firstDot then
-      local head = string.sub(s, 1, firstDot)
-      local tail = string.gsub(string.sub(s, firstDot + 1), "%.", "")
+    local dot = string.find(s, "%.")
+    if dot then
+      local head = string.sub(s, 1, dot)
+      local tail = string.gsub(string.sub(s, dot + 1), "%.", "")
       s = head .. tail
     end
     return s
   end
 
-  assertEqual(sanitize("30"),      "30",   "integer unchanged")
-  assertEqual(sanitize("1.5"),     "1.5",  "float unchanged")
-  assertEqual(sanitize("1,5"),     "1.5",  "comma→dot")
-  assertEqual(sanitize("abc"),     "",     "non-numeric → empty")
-  assertEqual(sanitize("1.2.3"),   "1.23", "double dot stripped")
-  assertEqual(sanitize(""),        "",     "empty string")
-  assertEqual(sanitize(nil),       "",     "nil → empty")
-  assertEqual(sanitize(" 10 "),    "10",   "spaces stripped")
+  eq(san("30"),    "30",   "integer")
+  eq(san("1.5"),   "1.5",  "float")
+  eq(san("1,5"),   "1.5",  "comma->dot")
+  eq(san("abc"),   "",     "letters stripped")
+  eq(san("1.2.3"), "1.23", "double dot")
+  eq(san(""),      "",     "empty")
+  eq(san(nil),     "",     "nil")
+  eq(san(" 10 "),  "10",   "spaces stripped")
 end)
 
 -- =============================================================
--- Runner
+-- Runner (global, no dependency on AutoLock object)
 -- =============================================================
-function AutoLock:RunTests(filter)
-  _results = {}
-  local ran = 0
-  local failed = 0
+function AutoLockTests(filter)
+  AL_PASS    = 0
+  AL_FAIL    = 0
+  AL_RESULTS = {}
 
-  for name, fn in pairs(_suite) do
+  for name, fn in pairs(SUITES) do
     if not filter or name == filter then
       local ok, err = pcall(fn)
-      ran = ran + 1
       if not ok then
-        table.insert(_results, { ok=false, label="[SUITE:"..name.."] crashed", msg=tostring(err) })
-        failed = failed + 1
+        T_fail("[suite:"..name.."] crashed", tostring(err))
       end
     end
   end
 
-  local total = table.getn(_results)
-  for _, r in ipairs(_results) do
-    if r.ok then
-      AutoLockLog.Info("[PASS] " .. r.label)
-    else
-      AutoLockLog.Error("[FAIL] " .. r.label .. (r.msg and (" – "..r.msg) or ""))
-      failed = failed + 1
-    end
+  for _, msg in ipairs(AL_RESULTS) do
+    DEFAULT_CHAT_FRAME:AddMessage("|cff9482C9[AutoLock]|r " .. msg)
   end
 
-  -- Recount actual failures from results
-  failed = 0
-  for _, r in ipairs(_results) do
-    if not r.ok then failed = failed + 1 end
-  end
-
-  local color = (failed == 0) and "|cff00ff00" or "|cffff4444"
-  AutoLockLog.Info(color .. "Tests: " .. (total - failed) .. "/" .. total
-    .. " passed, " .. failed .. " failed|r")
+  local total = AL_PASS + AL_FAIL
+  local color = (AL_FAIL == 0) and "|cff00ff00" or "|cffff4444"
+  DEFAULT_CHAT_FRAME:AddMessage("|cff9482C9[AutoLock]|r " .. color
+    .. "Tests: " .. AL_PASS .. "/" .. total .. " passed, "
+    .. AL_FAIL .. " failed|r")
 end
