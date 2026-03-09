@@ -121,7 +121,6 @@ function AutoLock:OnEnable()
   end
 
 	self:InitUI()
-	self:SpellbookInit()
 	self:BuildKnownSpellSet()
 end
 
@@ -269,7 +268,7 @@ f:SetScript("OnEvent", function()
 		end
 	elseif E == "SPELLS_CHANGED" then
 		AutoLock:BuildKnownSpellSet()
-		AutoLock:PrioScrollUpdate()  -- refresh list now that KnownSpells is current
+		if frame and frame:IsShown() then AutoLock:PrioScrollUpdate() end  -- refresh list now that KnownSpells is current
 	end
 end)
 
@@ -592,7 +591,7 @@ local function TryAction(entry)
 		if outOfRange == true then
 			return false
 		elseif outOfRange == nil then 
-			print("AutoLock: No Action-Slot for spell " .. entry.name .. " found! Range check not possible") 
+			AutoLockLog.Warning("No Action-Slot for spell " .. entry.name .. " found! Range check not possible")
 		end
 		
 		local manaCostNextSpell =  AutoLock:GetSpellManaCostByName(entry.name)

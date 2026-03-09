@@ -982,7 +982,7 @@ function AutoLock:CreateUI()
   -- Version label
   local spVersion = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
   spVersion:SetPoint("BOTTOM", settingsPanel, "BOTTOM", 0, 52)
-  spVersion:SetText("AutoLock v0.0.11")
+  spVersion:SetText("AutoLock v1.0.2")
 
   -- Buy me a coffee button
   -- Update the URL below with your PayPal.me link.

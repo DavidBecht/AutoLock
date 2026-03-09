@@ -4,9 +4,9 @@
 -- these with the real coloured versions once the game is fully restarted.
 if not AutoLockLog then
   AutoLockLog = {}
-  function AutoLockLog.Info(msg)    if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("[AutoLock] " .. tostring(msg)) end end
-  function AutoLockLog.Warning(msg) if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("[AutoLock][Warning] " .. tostring(msg)) end end
-  function AutoLockLog.Error(msg)   if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("[AutoLock][Error] " .. tostring(msg)) end end
+  function AutoLockLog.Info(msg)    if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cff9482C9[AutoLock]|r|cff00aaff[Info]|r: " .. tostring(msg)) end end
+  function AutoLockLog.Warning(msg) if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cff9482C9[AutoLock]|r|cffffff00[Warning]|r: " .. tostring(msg)) end end
+  function AutoLockLog.Error(msg)   if DEFAULT_CHAT_FRAME then DEFAULT_CHAT_FRAME:AddMessage("|cff9482C9[AutoLock]|r|cffff3333[Error]|r: " .. tostring(msg)) end end
 end
 
 -- Optional: kleine Cache-Tabelle, um wiederholte Scans zu sparen
@@ -98,7 +98,7 @@ function AutoLock:PrintBuffs()
   for i=0,40 do
     local buffId = GetPlayerBuffID(i)
     if not buffId then break end
-    print(SpellInfo(buffId))
+    AutoLockLog.Info(SpellInfo(buffId))
   end
 end
 

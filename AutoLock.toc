@@ -2,7 +2,7 @@
 ## Title: AutoLock |cff7fff7f TurtleWOW|r
 ## Notes: Cursive and cast helper for warlocks.
 ## Author: David Bechtold
-## Version: 1.0.1
+## Version: 1.0.2
 ## SavedVariables: AutoLockDB
 
 ..\Cursive\Libs\AceLibrary\AceLibrary.lua
@@ -23,6 +23,5 @@ AutoLock.xml
 AutoLockLog.lua
 AutoLock.lua
 Movement.lua
-AutoLockSpellbook.lua
 AutoLockHelper.lua
 AutoLockUI.lua
