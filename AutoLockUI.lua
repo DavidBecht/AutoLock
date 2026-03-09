@@ -150,6 +150,7 @@ local NAME_W  = 340  -- Spell-Name
 local REF_W   = 40   -- Refresh-EditBox
 local COND_W  = 56   -- Cond-Button
 local DEL_W   = 22   -- Delete-Button
+local CFG_W   = 36   -- Spell-Config-Button (z.B. Dark Harvest DoTs)
 local GAP     = 8
 
 -- =========================
@@ -248,7 +249,9 @@ function AutoLock:_reloadActiveCombatConfig()
   if not name then return end
   for _, cfg in ipairs(AutoLockDB.configs) do
     if cfg.name == name then
+      local savedName = AutoLock._loadedConfigName
       ApplyConfigToSpells(cfg)
+      AutoLock._loadedConfigName = savedName  -- goldener Rahmen bleibt auf zuletzt gewähltem Config
       return
     end
   end
@@ -498,6 +501,12 @@ function AutoLock:PrioScrollUpdate()
         row.nameText:SetTextColor(1, 0.82, 0)
       end
 
+      if e.name == "Dark Harvest" then
+        row.cfgBtn:Show()
+      else
+        row.cfgBtn:Hide()
+      end
+
       if e.type == "curse" then
         row.refreshBox:Show()
         row.refreshBox.settingEntry = e
@@ -513,7 +522,9 @@ function AutoLock:PrioScrollUpdate()
       end
 
       row.check:SetScript("OnClick", function()
-        e.enabled = (row.check:GetChecked() and true) or false
+        -- Toggle stored value; do NOT use GetChecked() which returns the pre-click
+        -- state in vanilla 1.12 and would invert the intended change.
+        e.enabled = not (e.enabled == true)
         AutoLock:PrioScrollUpdate()
       end)
     else
@@ -521,6 +532,83 @@ function AutoLock:PrioScrollUpdate()
     end
   end
   SaveCurrentConfigSpells()
+end
+
+-- =========================
+-- Dark Harvest DoTs Popup
+-- =========================
+local dhDotsPopup = nil
+
+local function ShowDHDotsPopup(anchor)
+  if not dhDotsPopup then
+    dhDotsPopup = CreateFrame("Frame", "AutoLockDHDotsPopup", UIParent)
+    dhDotsPopup:SetWidth(220); dhDotsPopup:SetHeight(178)
+    dhDotsPopup:SetFrameStrata("TOOLTIP")
+    dhDotsPopup:SetBackdrop({
+      bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
+      edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+      tile = true, tileSize = 32, edgeSize = 16,
+      insets = { left = 5, right = 5, top = 5, bottom = 5 }
+    })
+    dhDotsPopup:SetBackdropColor(0.1, 0.1, 0.15, 1)
+    dhDotsPopup:EnableMouse(true)
+
+    local title = dhDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    title:SetPoint("TOP", dhDotsPopup, "TOP", 0, -10)
+    title:SetText("Dark Harvest requires DoTs:")
+
+    local closeBtn = CreateFrame("Button", nil, dhDotsPopup, "UIPanelCloseButton")
+    closeBtn:SetWidth(18); closeBtn:SetHeight(18)
+    closeBtn:SetPoint("TOPRIGHT", dhDotsPopup, "TOPRIGHT", -2, -2)
+    closeBtn:SetScript("OnClick", function() dhDotsPopup:Hide() end)
+
+    local function makeDotCheck(key, label, prevAnchor, yOffset)
+      local cb = CreateFrame("CheckButton", nil, dhDotsPopup, "UICheckButtonTemplate")
+      cb:SetWidth(18); cb:SetHeight(18)
+      if prevAnchor then
+        cb:SetPoint("TOPLEFT", prevAnchor, "BOTTOMLEFT", 0, yOffset or -6)
+      else
+        cb:SetPoint("TOPLEFT", dhDotsPopup, "TOPLEFT", 10, -30)
+      end
+      cb:SetScript("OnClick", function()
+        local cfg = GetActiveConfig()
+        if not cfg then return end
+        if not cfg.darkHarvestDots then cfg.darkHarvestDots = {} end
+        local newVal = not (cfg.darkHarvestDots[key] == true)
+        cfg.darkHarvestDots[key] = newVal
+        cb:SetChecked(newVal and 1 or nil)
+      end)
+      local lbl = dhDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+      lbl:SetPoint("LEFT", cb, "RIGHT", 4, 0)
+      lbl:SetText(label)
+      cb._key = key
+      return cb
+    end
+
+    dhDotsPopup.agonyCheck      = makeDotCheck("agony",      "Curse of Agony",       nil)
+    dhDotsPopup.corruptionCheck = makeDotCheck("corruption", "Corruption",            dhDotsPopup.agonyCheck)
+    dhDotsPopup.siphonCheck     = makeDotCheck("siphonLife", "Siphon Life",           dhDotsPopup.corruptionCheck)
+    dhDotsPopup.shadowVulnCheck = makeDotCheck("shadowVuln", "Shadow Vulnerability",  dhDotsPopup.siphonCheck)
+
+  end
+
+  if dhDotsPopup:IsShown() and dhDotsPopup.anchor == anchor then
+    dhDotsPopup:Hide()
+    return
+  end
+  dhDotsPopup.anchor = anchor
+  dhDotsPopup:ClearAllPoints()
+  dhDotsPopup:SetPoint("BOTTOMLEFT", anchor, "TOPLEFT", 0, 4)
+
+  -- Checkboxen vor Show() setzen damit der Zustand beim Öffnen korrekt ist
+  local cfg = GetActiveConfig()
+  local dh = (cfg and cfg.darkHarvestDots) or {}
+  dhDotsPopup.agonyCheck:SetChecked(dh.agony and 1 or nil)
+  dhDotsPopup.corruptionCheck:SetChecked(dh.corruption and 1 or nil)
+  dhDotsPopup.siphonCheck:SetChecked(dh.siphonLife and 1 or nil)
+  dhDotsPopup.shadowVulnCheck:SetChecked(dh.shadowVuln and 1 or nil)
+
+  dhDotsPopup:Show()
 end
 
 local function CreatePrioUIOnce(parent)
@@ -734,11 +822,24 @@ local function CreatePrioUIOnce(parent)
       ShowCondFrameForEntry(row.entry, row)
     end)
 
+    -- Cfg-Button (nur für Spells mit per-spell Config, z.B. Dark Harvest)
+    row.cfgBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+    row.cfgBtn:SetText("Cfg")
+    row.cfgBtn:SetWidth(CFG_W); row.cfgBtn:SetHeight(18)
+    row.cfgBtn:SetPoint("LEFT", row.cond, "RIGHT", GAP, 0)
+    row.cfgBtn:SetFrameLevel(row:GetFrameLevel() + 1)
+    row.cfgBtn:SetScript("OnClick", function()
+      if row.entry and row.entry.name == "Dark Harvest" then
+        ShowDHDotsPopup(row.cfgBtn)
+      end
+    end)
+    row.cfgBtn:Hide()
+
     -- Delete-Button
     row.delBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
     row.delBtn:SetText("X")
     row.delBtn:SetWidth(DEL_W); row.delBtn:SetHeight(18)
-    row.delBtn:SetPoint("LEFT", row.cond, "RIGHT", GAP, 0)
+    row.delBtn:SetPoint("LEFT", row.cfgBtn, "RIGHT", GAP, 0)
     row.delBtn:SetFrameLevel(row:GetFrameLevel() + 1)
     row.delBtn:SetScript("OnClick", function()
       if not row.entry then return end
@@ -788,7 +889,31 @@ function AutoLock:CreateUI()
   })
   frame:SetBackdropColor(0,0,0,0.85)
 
+  tinsert(UISpecialFrames, "AutoLockFrame")
+
+  frame:SetScript("OnShow", function()
+    -- Restore SPELL_PRIORITY from the previewed config.
+    -- _reloadActiveCombatConfig() (called on close) replaces SPELL_PRIORITY with the
+    -- active combat config; without this restore, PrioScrollUpdate → SaveCurrentConfigSpells
+    -- would overwrite the previewed config's saved spells with the combat config's values.
+    local name = AutoLock._loadedConfigName
+    if name and AutoLockDB and AutoLockDB.configs then
+      for _, cfg in ipairs(AutoLockDB.configs) do
+        if cfg.name == name then
+          ApplyConfigToSpells(cfg)  -- restores SPELL_PRIORITY; keeps _loadedConfigName = name
+          break
+        end
+      end
+    end
+  end)
+
   frame:SetScript("OnHide", function()
+    -- ESC-Priorität: wenn DH-Popup offen ist, nur diesen schließen
+    if dhDotsPopup and dhDotsPopup:IsShown() then
+      frame:Show()
+      dhDotsPopup:Hide()
+      return
+    end
     -- SPELL_PRIORITY könnte durch UI-Vorschau abweichen → Combat-Config wiederherstellen
     if AutoLock._reloadActiveCombatConfig then
       AutoLock:_reloadActiveCombatConfig()

@@ -175,6 +175,51 @@ local DRAIN_SOUL_NAME = "Drain Soul"
 local DARK_HARVEST_NAME = "Dark Harvest"
 local SpellStartedName = nil
 
+-- Cursive-tracked curses (use Cursive.curses:HasCurse)
+local DARK_HARVEST_CURSE_NAMES = {
+  agony      = "curse of agony",
+  corruption = "corruption",
+  siphonLife = "siphon life",
+}
+-- Non-Cursive debuffs (use UnitDebuff + SpellInfo via SuperWoW)
+local DARK_HARVEST_DEBUFF_NAMES = {
+  shadowVuln = "Shadow Vulnerability",
+}
+
+local function darkHarvestDotsReady()
+  local req = nil
+  local combatName = AutoLock._combatConfigName or (AutoLockDB and AutoLockDB.activeConfig)
+  if combatName and AutoLockDB and AutoLockDB.configs then
+    for _, c in ipairs(AutoLockDB.configs) do
+      if c.name == combatName then
+        req = c.darkHarvestDots
+        break
+      end
+    end
+  end
+  if not req then return true end
+
+  local _, targetGuid = UnitExists("target")
+
+  for key, curseName in pairs(DARK_HARVEST_CURSE_NAMES) do
+    if req[key] then
+      if not Cursive or not Cursive.curses:HasCurse(curseName, targetGuid, 0) then
+        return false
+      end
+    end
+  end
+
+  for key, debuffName in pairs(DARK_HARVEST_DEBUFF_NAMES) do
+    if req[key] then
+      if not AutoLock:HasDebuffByName("target", debuffName) then
+        return false
+      end
+    end
+  end
+
+  return true
+end
+
 local WandShooting = false
 local DrainSoulChanneling = false
 local DarkHarvestChanneling = false
@@ -464,6 +509,7 @@ SPELL_PRIORITY = {
 			if MovementEvents and MovementEvents:IsMoving() then return false end
 			local onCD, rankStr = AutoLock:IsOnCooldown("Dark Harvest")
 			if onCD then return false end
+			if not darkHarvestDotsReady() then return false end
 			return darkHarvestChannelingFinished()
 		end,
 	},

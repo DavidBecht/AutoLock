@@ -153,6 +153,38 @@ function AutoLock:HasAnyBuff(unit, buffName, texturefile)
     return false
 end
 
+-- Checks debuff by spell name via SuperWoW (requires GUID, same pattern as Cursive)
+function AutoLock:HasDebuffByName(unit, spellName)
+  if not SpellInfo then return false end
+  local _, guid = UnitExists(unit)
+  if not guid then return false end
+  for i = 1, 40 do
+    local _, _, _, spellID = UnitDebuff(guid, i)
+    if spellID then
+      local name = SpellInfo(spellID)
+      if name == spellName then return true end
+    else
+      break
+    end
+  end
+  return false
+end
+
+-- Debug: /run AutoLock:PrintTargetDebuffs()
+function AutoLock:PrintTargetDebuffs()
+  if not SpellInfo then AutoLockLog.Warning("SuperWoW required"); return end
+  local _, guid = UnitExists("target")
+  if not guid then AutoLockLog.Warning("No target"); return end
+  AutoLockLog.Info("Target debuffs:")
+  for i = 1, 40 do
+    local _, _, _, spellID = UnitDebuff(guid, i)
+    if spellID then
+      AutoLockLog.Info("  [" .. i .. "] " .. (SpellInfo(spellID) or "?") .. " (id=" .. spellID .. ")")
+    else
+      break
+    end
+  end
+end
 
 
 local function ExtractManaCost(text)

@@ -25,3 +25,4 @@ AutoLock.lua
 Movement.lua
 AutoLockHelper.lua
 AutoLockUI.lua
+AutoLockTest.lua
