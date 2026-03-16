@@ -146,14 +146,15 @@ end)
 
 -- =============================================================
 -- Suite 3b: isBlockedByDrainSoul logic (pure Lua, no WoW API)
--- Curses are suppressed DURING drain soul channel if configured.
+-- A curse is ALLOWED during DS when its checkbox is checked (dots[key]==true).
+-- When unchecked or no config: the curse is BLOCKED (default safe).
 -- =============================================================
 def_suite("isBlockedByDrainSoul", function()
-  -- Simulates: isBlockedByDrainSoul(key, channeling, drainSoulDots)
+  -- Simulates the corrected isBlockedByDrainSoul(key, channeling, drainSoulDots)
   local function blocked(key, channeling, dots)
     if not channeling then return false end
-    if not dots then return false end
-    return dots[key] == true
+    if not dots then return false end         -- no config -> all allowed (default on)
+    return dots[key] ~= true                  -- only explicitly unchecked = blocked
   end
 
   -- not channeling -> never blocked regardless of config
@@ -161,29 +162,29 @@ def_suite("isBlockedByDrainSoul", function()
   is_false(blocked("corruption", false, { corruption=true }), "not channeling -> not blocked")
   is_false(blocked("siphonLife", false, { siphonLife=true }), "not channeling -> not blocked")
 
-  -- channeling, no config -> not blocked
-  is_false(blocked("agony", true, nil), "channeling, nil config -> not blocked")
-  is_false(blocked("agony", true, {}),  "channeling, empty config -> not blocked")
+  -- channeling, no config -> allowed (default on)
+  is_false(blocked("agony", true, nil), "channeling, nil config -> not blocked (default on)")
+  is_true(blocked("agony", true, {}),   "channeling, empty config -> blocked (unchecked)")
 
-  -- channeling + key=true -> blocked
-  is_true(blocked("agony",      true, { agony=true }),      "agony blocked during DS")
-  is_true(blocked("corruption", true, { corruption=true }), "corruption blocked during DS")
-  is_true(blocked("siphonLife", true, { siphonLife=true }), "siphonLife blocked during DS")
+  -- channeling + key=true (checkbox checked) -> NOT blocked (allowed)
+  is_false(blocked("agony",      true, { agony=true }),      "agony checked -> allowed during DS")
+  is_false(blocked("corruption", true, { corruption=true }), "corruption checked -> allowed during DS")
+  is_false(blocked("siphonLife", true, { siphonLife=true }), "siphonLife checked -> allowed during DS")
 
-  -- channeling + key=false -> not blocked
-  is_false(blocked("agony", true, { agony=false }), "agony=false -> not blocked")
+  -- channeling + key=false (checkbox unchecked) -> blocked
+  is_true(blocked("agony", true, { agony=false }), "agony=false -> blocked during DS")
 
-  -- other key not in config -> not blocked
-  is_false(blocked("corruption", true, { agony=true }), "different key -> not blocked")
+  -- other key not checked -> blocked
+  is_true(blocked("corruption", true, { agony=true }), "corruption unchecked -> blocked")
 
-  -- all three blocked
-  local allDots = { agony=true, corruption=true, siphonLife=true }
-  is_true(blocked("agony",      true, allDots), "all blocked: agony")
-  is_true(blocked("corruption", true, allDots), "all blocked: corruption")
-  is_true(blocked("siphonLife", true, allDots), "all blocked: siphonLife")
+  -- all three checked -> all allowed
+  local allChecked = { agony=true, corruption=true, siphonLife=true }
+  is_false(blocked("agony",      true, allChecked), "all checked: agony allowed")
+  is_false(blocked("corruption", true, allChecked), "all checked: corruption allowed")
+  is_false(blocked("siphonLife", true, allChecked), "all checked: siphonLife allowed")
 
-  -- DS itself has no blocking config (no shadowVuln key)
-  is_false(blocked("shadowVuln", true, allDots), "shadowVuln not in DS config")
+  -- shadowVuln not a DS key -> blocked (not in config)
+  is_true(blocked("shadowVuln", true, allChecked), "shadowVuln not in DS config -> blocked")
 end)
 
 -- =============================================================
@@ -294,6 +295,330 @@ def_suite("sanitizeNumber", function()
   eq(san(""),      "",     "empty")
   eq(san(nil),     "",     "nil")
   eq(san(" 10 "),  "10",   "spaces stripped")
+end)
+
+-- =============================================================
+-- Suite 8: isBlockedByDrainSoul – real function, controlled state
+-- Uses test hooks added in AutoLock.lua.
+-- =============================================================
+def_suite("drainSoulBlocking", function()
+  local savedDB          = AutoLockDB
+  local savedCombatName  = AutoLock._combatConfigName
+
+  local function restore()
+    AutoLockDB                 = savedDB
+    AutoLock._combatConfigName = savedCombatName
+    AutoLock:_testSetDrainSoulChanneling(false)
+  end
+
+  local ok, err = pcall(function()
+    AutoLockDB = {
+      configs = { { name="DS_Test", drainSoulDots = { agony=true, corruption=true } } },
+      activeConfig = "DS_Test",
+    }
+    AutoLock._combatConfigName = "DS_Test"
+
+    -- Not channeling -> never blocked regardless of config
+    AutoLock:_testSetDrainSoulChanneling(false)
+    is_false(AutoLock:_testIsBlockedByDrainSoul("agony"),      "not channeling: agony not blocked")
+    is_false(AutoLock:_testIsBlockedByDrainSoul("corruption"), "not channeling: corruption not blocked")
+    is_false(AutoLock:_testIsBlockedByDrainSoul("siphonLife"), "not channeling: siphonLife not blocked")
+
+    -- Channeling + key checked -> allowed (not blocked)
+    AutoLock:_testSetDrainSoulChanneling(true)
+    AutoLock:_testSetDrainSoulTiming(GetTime() - 10, 5)  -- elapsed, so channeling is "finished"
+    is_false(AutoLock:_testIsBlockedByDrainSoul("agony"),      "channeling: agony checked -> allowed")
+    is_false(AutoLock:_testIsBlockedByDrainSoul("corruption"), "channeling: corruption checked -> allowed")
+
+    -- Active channel (not yet finished)
+    AutoLock:_testSetDrainSoulTiming(GetTime(), 15)
+    is_true (AutoLock:_testIsBlockedByDrainSoul("siphonLife"), "channeling: siphonLife unchecked -> blocked")
+
+    -- Check siphonLife -> now allowed
+    AutoLockDB.configs[1].drainSoulDots.siphonLife = true
+    is_false(AutoLock:_testIsBlockedByDrainSoul("siphonLife"), "channeling: siphonLife now checked -> allowed")
+
+    -- Uncheck agony (false) -> blocked
+    AutoLockDB.configs[1].drainSoulDots.agony = false
+    is_true(AutoLock:_testIsBlockedByDrainSoul("agony"), "channeling: agony=false -> blocked")
+
+    -- Wrong combat config name -> blocked (safe default, config not found)
+    AutoLock._combatConfigName = "NonExistent"
+    is_true(AutoLock:_testIsBlockedByDrainSoul("corruption"), "wrong config name -> blocked (safe default)")
+
+    -- nil combatConfigName falls back to activeConfig
+    AutoLock._combatConfigName = nil
+    AutoLockDB.configs[1].drainSoulDots.corruption = true
+    is_false(AutoLock:_testIsBlockedByDrainSoul("corruption"), "nil combatName: falls back to activeConfig")
+
+    -- nil drainSoulDots on config -> not blocked (default on)
+    AutoLock._combatConfigName = "DS_Test"
+    AutoLockDB.configs[1].drainSoulDots = nil
+    is_false(AutoLock:_testIsBlockedByDrainSoul("agony"), "nil drainSoulDots -> not blocked (default on)")
+  end)
+
+  restore()
+  if not ok then T_fail("[drainSoulBlocking] crashed", tostring(err)) end
+end)
+
+-- =============================================================
+-- Suite 9: drainSoulConditions – condition functions in
+-- SPELL_PRIORITY for CoA / Corruption / Siphon Life must
+-- delegate to isBlockedByDrainSoul correctly.
+-- =============================================================
+def_suite("drainSoulConditions", function()
+  -- Locate the three entries in SPELL_PRIORITY
+  local coaCond, corrCond, slCond
+  for _, e in ipairs(SPELL_PRIORITY) do
+    if e.name == "Curse of Agony"  and e.type == "curse" then coaCond  = e.condition end
+    if e.name == "Corruption"      and e.type == "curse" then corrCond = e.condition end
+    if e.name == "Siphon Life"     and e.type == "curse" then slCond   = e.condition end
+  end
+
+  is_true(coaCond  ~= nil, "Curse of Agony has a condition function")
+  is_true(corrCond ~= nil, "Corruption has a condition function")
+  is_true(slCond   ~= nil, "Siphon Life has a condition function")
+  if not coaCond or not corrCond or not slCond then return end
+
+  local savedDB         = AutoLockDB
+  local savedCombatName = AutoLock._combatConfigName
+
+  local function restore()
+    AutoLockDB                 = savedDB
+    AutoLock._combatConfigName = savedCombatName
+    AutoLock:_testSetDrainSoulChanneling(false)
+  end
+
+  local ok, err = pcall(function()
+    AutoLockDB = {
+      configs = { { name="CondTest", drainSoulDots = { agony=true, corruption=true, siphonLife=true } } },
+      activeConfig = "CondTest",
+    }
+    AutoLock._combatConfigName = "CondTest"
+
+    -- Not channeling -> all conditions return true (spells always allowed)
+    AutoLock:_testSetDrainSoulChanneling(false)
+    is_true(coaCond ("target"), "CoA cond: not channeling -> allowed (returns true)")
+    is_true(corrCond("target"), "Corruption cond: not channeling -> allowed (returns true)")
+    is_true(slCond  ("target"), "SiphonLife cond: not channeling -> allowed (returns true)")
+
+    -- Channeling + all checked -> all conditions return true (renewal allowed)
+    AutoLock:_testSetDrainSoulChanneling(true)
+    AutoLock:_testSetDrainSoulTiming(GetTime() - 10, 5)  -- elapsed, treat as finished
+    is_true(coaCond ("target"), "CoA cond: channeling, checked -> allowed (returns true)")
+    is_true(corrCond("target"), "Corruption cond: channeling, checked -> allowed (returns true)")
+    is_true(slCond  ("target"), "SiphonLife cond: channeling, checked -> allowed (returns true)")
+
+    -- Active channel: uncheck siphonLife -> blocked
+    AutoLock:_testSetDrainSoulTiming(GetTime(), 15)
+    AutoLockDB.configs[1].drainSoulDots.siphonLife = false
+    is_false(slCond("target"), "SiphonLife cond: unchecked -> blocked (returns false)")
+
+    -- No drainSoulDots at all -> all allowed (default on)
+    AutoLockDB.configs[1].drainSoulDots = nil
+    is_true(coaCond ("target"), "CoA cond: nil drainSoulDots -> not blocked (default on)")
+    is_true(corrCond("target"), "Corruption cond: nil drainSoulDots -> not blocked (default on)")
+  end)
+
+  restore()
+  if not ok then T_fail("[drainSoulConditions] crashed", tostring(err)) end
+end)
+
+-- =============================================================
+-- Suite 10: drainSoulRestartBug
+-- Reproduces the race condition where DS restarts instead of
+-- refreshing curses after the channel finishes.
+--
+-- Root cause: isBlockedByDrainSoul checks only DrainSoulChanneling
+-- (boolean), while drainSoulChannelingFinished() also uses elapsed
+-- time. When the channel has timed out but the CHANNEL_STOP event
+-- has not yet fired, DrainSoulChanneling is still true →
+--   • curses are blocked (isBlockedByDrainSoul = true)
+--   • DS condition passes (drainSoulChannelingFinished = true)
+-- → DS fires again instead of refreshing the expired curses.
+-- =============================================================
+def_suite("drainSoulRestartBug", function()
+  local savedDB         = AutoLockDB
+  local savedCombatName = AutoLock._combatConfigName
+
+  local function restore()
+    AutoLockDB                 = savedDB
+    AutoLock._combatConfigName = savedCombatName
+    AutoLock:_testSetDrainSoulChanneling(false)
+  end
+
+  local ok, err = pcall(function()
+    -- All curses unchecked (blocked during DS) — the config the user chose
+    AutoLockDB = {
+      configs = { { name = "DSRestartTest", drainSoulDots = {} } },
+      activeConfig = "DSRestartTest",
+    }
+    AutoLock._combatConfigName = "DSRestartTest"
+
+    -- Simulate: DS channel flag still set but has elapsed (event not yet fired)
+    AutoLock:_testSetDrainSoulChanneling(true)
+    AutoLock:_testSetDrainSoulTiming(GetTime() - 10, 5)  -- started 10s ago, 5s duration -> done 5s ago
+
+    -- BUG: isBlockedByDrainSoul ignores elapsed time, still returns true
+    -- → curses are blocked even though DS has finished → DS fires again
+    -- These assertions FAIL until isBlockedByDrainSoul respects drainSoulChannelingFinished()
+    is_false(AutoLock:_testIsBlockedByDrainSoul("agony"),
+      "drainSoulRestartBug: DS timed out -> agony must NOT be blocked")
+    is_false(AutoLock:_testIsBlockedByDrainSoul("corruption"),
+      "drainSoulRestartBug: DS timed out -> corruption must NOT be blocked")
+    is_false(AutoLock:_testIsBlockedByDrainSoul("siphonLife"),
+      "drainSoulRestartBug: DS timed out -> siphonLife must NOT be blocked")
+
+    -- Sanity: channel still active (time remaining) → curses ARE blocked
+    AutoLock:_testSetDrainSoulTiming(GetTime(), 15)  -- just started, 15s duration
+    is_true(AutoLock:_testIsBlockedByDrainSoul("agony"),
+      "drainSoulRestartBug: DS active -> agony is blocked (correct)")
+  end)
+
+  restore()
+  if not ok then T_fail("[drainSoulRestartBug] crashed", tostring(err)) end
+end)
+
+-- =============================================================
+-- Suite 11: Curse of Shadow DS blocking
+-- CoS has no DS-blocking condition → it gets cast during DS channeling →
+-- that INTERRUPTS the DS channel → DrainSoulChanneling becomes false →
+-- on the next press isBlockedByDrainSoul("agony") returns false →
+-- Curse of Agony is no longer blocked. Fix: CoS needs the same DS
+-- blocking condition as CoA (they share the curse slot / agony key).
+-- =============================================================
+def_suite("cosDrainSoulBlocking", function()
+  -- Locate CoS entry
+  local cosEntry
+  for _, e in ipairs(SPELL_PRIORITY) do
+    if e.name == "Curse of Shadow" and e.type == "curse" then
+      cosEntry = e
+      break
+    end
+  end
+  is_true(cosEntry ~= nil, "Curse of Shadow entry found in SPELL_PRIORITY")
+  if not cosEntry then return end
+
+  -- CoS must have a condition to block during DS (currently nil → FAILS)
+  is_true(cosEntry.condition ~= nil, "Curse of Shadow must have a DS-blocking condition")
+  if not cosEntry.condition then return end
+
+  local savedDB         = AutoLockDB
+  local savedCombatName = AutoLock._combatConfigName
+
+  local function restore()
+    AutoLockDB                 = savedDB
+    AutoLock._combatConfigName = savedCombatName
+    AutoLock:_testSetDrainSoulChanneling(false)
+  end
+
+  local ok, err = pcall(function()
+    AutoLockDB = {
+      configs = { { name = "CosDS", drainSoulDots = { agony = false } } },
+      activeConfig = "CosDS",
+    }
+    AutoLock._combatConfigName = "CosDS"
+
+    -- DS active, agony unchecked → CoS must be blocked too (same curse slot)
+    AutoLock:_testSetDrainSoulChanneling(true)
+    AutoLock:_testSetDrainSoulTiming(GetTime(), 15)
+    is_false(cosEntry.condition("target"),
+      "CoS: active DS, agony unchecked -> blocked (prevents DS interrupt)")
+
+    -- DS active, agony checked → CoS allowed
+    AutoLockDB.configs[1].drainSoulDots.agony = true
+    is_true(cosEntry.condition("target"),
+      "CoS: active DS, agony checked -> allowed")
+
+    -- Not channeling → always allowed
+    AutoLock:_testSetDrainSoulChanneling(false)
+    AutoLockDB.configs[1].drainSoulDots.agony = false
+    is_true(cosEntry.condition("target"),
+      "CoS: not channeling, agony unchecked -> allowed (no DS active)")
+  end)
+
+  restore()
+  if not ok then T_fail("[cosDrainSoulBlocking] crashed", tostring(err)) end
+end)
+
+-- =============================================================
+-- Suite 12: Curse of Shadow / Curse of Agony mutual exclusivity
+-- CoA condition must return false when CoS is already on the target,
+-- because only one curse can be active at a time. Without this guard
+-- CoA would overwrite CoS on every other macro press.
+-- =============================================================
+def_suite("cosCoaMutualExclusion", function()
+  local coaCond
+  for _, e in ipairs(SPELL_PRIORITY) do
+    if e.name == "Curse of Agony" and e.type == "curse" then
+      coaCond = e.condition
+      break
+    end
+  end
+  is_true(coaCond ~= nil, "Curse of Agony has a condition function")
+  if not coaCond then return end
+
+  local savedDB         = AutoLockDB
+  local savedCombatName = AutoLock._combatConfigName
+  local savedCursive    = Cursive
+
+  local function restore()
+    AutoLockDB                 = savedDB
+    AutoLock._combatConfigName = savedCombatName
+    Cursive                    = savedCursive
+    AutoLock:_testSetDrainSoulChanneling(false)
+  end
+
+  local ok, err = pcall(function()
+    AutoLockDB = {
+      configs = { { name = "CoSTest", drainSoulDots = { agony = true } } },
+      activeConfig = "CoSTest",
+    }
+    AutoLock._combatConfigName = "CoSTest"
+    AutoLock:_testSetDrainSoulChanneling(false)
+
+    -- No Cursive: CoS check skipped, CoA allowed
+    Cursive = nil
+    is_true(coaCond("target"), "no Cursive: CoA condition returns true")
+
+    -- Cursive present but no .curses table: CoA allowed
+    Cursive = {}
+    is_true(coaCond("target"), "Cursive without .curses: CoA condition returns true")
+
+    -- Cursive present, CoS NOT on target -> CoA allowed
+    Cursive = {
+      curses = {
+        HasCurse = function(self, name, guid, refresh)
+          return name == "curse of agony"  -- only CoA on target (e.g. first-ever cast)
+        end
+      }
+    }
+    is_true(coaCond("target"), "CoS absent: CoA condition returns true")
+
+    -- Cursive present, CoS IS on target -> CoA blocked (don't overwrite)
+    Cursive = {
+      curses = {
+        HasCurse = function(self, name, guid, refresh)
+          return name == "curse of shadow"
+        end
+      }
+    }
+    is_false(coaCond("target"), "CoS active: CoA condition returns false (mutual exclusion)")
+
+    -- DS blocking takes precedence even when CoS is absent
+    AutoLock:_testSetDrainSoulChanneling(true)
+    AutoLock:_testSetDrainSoulTiming(GetTime(), 15)
+    AutoLockDB.configs[1].drainSoulDots = {}  -- agony unchecked
+    Cursive = {
+      curses = {
+        HasCurse = function(self, name, guid, refresh) return false end
+      }
+    }
+    is_false(coaCond("target"), "DS blocking: CoA condition returns false regardless of CoS")
+  end)
+
+  restore()
+  if not ok then T_fail("[cosCoaMutualExclusion] crashed", tostring(err)) end
 end)
 
 -- =============================================================

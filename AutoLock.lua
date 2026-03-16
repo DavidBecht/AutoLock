@@ -175,6 +175,17 @@ local DRAIN_SOUL_NAME = "Drain Soul"
 local DARK_HARVEST_NAME = "Dark Harvest"
 local SpellStartedName = nil
 
+local WandShooting = false
+local DrainSoulChanneling = false
+local DarkHarvestChanneling = false
+local ShadowTrancePending = false
+
+local DrainSoulCastedAt = 0
+local DrainSoulDuration = 0
+
+local DarkHarvestCastedAt = 0
+local DarkHarvestDuration = 0
+
 -- Cursive-tracked curses (use Cursive.curses:HasCurse)
 local DARK_HARVEST_CURSE_NAMES = {
   agony      = "curse of agony",
@@ -186,15 +197,48 @@ local DARK_HARVEST_DEBUFF_NAMES = {
   shadowVuln = "Shadow Vulnerability",
 }
 
--- Returns true if the given curse key (agony/corruption/siphonLife) is configured
--- to be suppressed while Drain Soul is channeling.
+-- Returns true if the given curse key (agony/corruption/siphonLife) is blocked
+-- during Drain Soul channeling. A curse is allowed only when its checkbox is
+-- explicitly checked (drainSoulDots[key] == true); otherwise it is blocked.
 local function isBlockedByDrainSoul(key)
   if not DrainSoulChanneling then return false end
+  -- Channel flag may still be set after the channel ends (CHANNEL_STOP event not yet fired).
+  -- Treat as finished so curses are not blocked when DS restarts is imminent.
+  if DrainSoulDuration > 0 and (GetTime() - DrainSoulCastedAt) >= (DrainSoulDuration - 0.04) then
+    return false
+  end
+  local combatName = AutoLock._combatConfigName or (AutoLockDB and AutoLockDB.activeConfig)
+  if not combatName or not AutoLockDB or not AutoLockDB.configs then return true end
+  for _, c in ipairs(AutoLockDB.configs) do
+    if c.name == combatName then
+      if not c.drainSoulDots then return false end  -- no config = all allowed (default on)
+      return c.drainSoulDots[key] ~= true
+    end
+  end
+  return true
+end
+
+-- Test hooks: allow unit tests to control internal state without WoW events.
+function AutoLock:_testSetDrainSoulChanneling(v)
+  DrainSoulChanneling = v
+end
+function AutoLock:_testIsBlockedByDrainSoul(key)
+  return isBlockedByDrainSoul(key)
+end
+function AutoLock:_testSetDrainSoulTiming(castedAt, duration)
+  DrainSoulCastedAt  = castedAt
+  DrainSoulDuration  = duration
+end
+
+-- Returns true if Nightfall (Shadow Trance Shadow Bolt) is allowed to
+-- interrupt a running Dark Harvest channel per config setting.
+local function isDHNightfallAllowed(entry)
+  if not (entry.priority == 1 and entry.name == "Shadow Bolt") then return false end
   local combatName = AutoLock._combatConfigName or (AutoLockDB and AutoLockDB.activeConfig)
   if not combatName or not AutoLockDB or not AutoLockDB.configs then return false end
   for _, c in ipairs(AutoLockDB.configs) do
     if c.name == combatName then
-      return c.drainSoulDots and c.drainSoulDots[key] == true
+      return c.darkHarvestAllowNightfall == true
     end
   end
   return false
@@ -233,17 +277,6 @@ local function darkHarvestDotsReady()
 
   return true
 end
-
-local WandShooting = false
-local DrainSoulChanneling = false
-local DarkHarvestChanneling = false
-local ShadowTrancePending = false
-
-local DrainSoulCastedAt = 0
-local DrainSoulDuration = 0
-
-local DarkHarvestCastedAt = 0
-local DarkHarvestDuration = 0
 
 local f = CreateFrame("Frame")
 -- klassische Cast-Events
@@ -421,9 +454,18 @@ SPELL_PRIORITY = {
 	},
 
   
-	{ name = "Curse of Shadow", type = "curse", priority = 6, refreshtime = 0, target = "target", enabled = true },
-  { name = "Curse of Agony",  type = "curse", priority = 7, refreshtime = 0, target = "target", enabled = true,
+	{ name = "Curse of Shadow", type = "curse", priority = 6, refreshtime = 0, target = "target", enabled = true,
     condition = function(unit) return not isBlockedByDrainSoul("agony") end },
+  { name = "Curse of Agony",  type = "curse", priority = 7, refreshtime = 0, target = "target", enabled = true,
+    condition = function(unit)
+      if isBlockedByDrainSoul("agony") then return false end
+      -- Curse of Shadow and Curse of Agony are mutually exclusive; don't overwrite CoS
+      if Cursive and Cursive.curses then
+        local _, tGuid = UnitExists("target")
+        if Cursive.curses:HasCurse("curse of shadow", tGuid, 0) then return false end
+      end
+      return true
+    end },
   { name = "Corruption",      type = "curse", priority = 8, refreshtime = 0, target = "target", enabled = true,
     condition = function(unit) return not isBlockedByDrainSoul("corruption") end },
   { name = "Siphon Life",
@@ -641,8 +683,10 @@ local function TryAction(entry)
 	-- Skip if not enabled
 	if entry.enabled == nil or entry.enabled == false then return false end
 	
-	-- Skip if DarkHarvest is Channeling
-	if not darkHarvestChannelingFinished() then return false end
+	-- Skip if DarkHarvest is Channeling (unless Nightfall override is active)
+	if not darkHarvestChannelingFinished() then
+		if not isDHNightfallAllowed(entry) then return false end
+	end
 	
   -- Skip if condition fails
   if entry.condition and not entry.condition(t) then return false end

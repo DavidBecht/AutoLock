@@ -162,6 +162,89 @@ local function GetSpellKey(e)
   return (e.uitext or e.name or "?").."|"..(e.type or "?")
 end
 
+-- Own tooltip frame so we don't share state/backdrop with GameTooltip
+local AL_TT = CreateFrame("Frame", "AutoLockTooltip", UIParent)
+AL_TT:SetFrameStrata("TOOLTIP")
+AL_TT:SetFrameLevel(200)
+AL_TT:SetBackdrop({
+  bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+  edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+  tile = true, tileSize = 16, edgeSize = 16,
+  insets = { left=4, right=4, top=4, bottom=4 },
+})
+AL_TT:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+AL_TT:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+AL_TT:Hide()
+
+local AL_TT_title = AL_TT:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+AL_TT_title:SetPoint("TOPLEFT", AL_TT, "TOPLEFT", 8, -8)
+AL_TT_title:SetJustifyH("LEFT")
+
+local AL_TT_body = AL_TT:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+AL_TT_body:SetPoint("TOPLEFT", AL_TT_title, "BOTTOMLEFT", 0, -4)
+AL_TT_body:SetJustifyH("LEFT")
+
+local _AL_TT_NativeShow = AL_TT.Show
+
+function AL_TT:SetOwner(owner, anchor)
+  self:ClearAllPoints()
+  if anchor == "ANCHOR_LEFT" then
+    self:SetPoint("RIGHT", owner, "LEFT", -4, 0)
+  elseif anchor == "ANCHOR_BOTTOM" then
+    self:SetPoint("TOP", owner, "BOTTOM", 0, -4)
+  elseif anchor == "ANCHOR_TOP" then
+    self:SetPoint("BOTTOM", owner, "TOP", 0, 4)
+  else
+    self:SetPoint("LEFT", owner, "RIGHT", 4, 0)
+  end
+  self._ttLines = {}
+end
+
+function AL_TT:ClearLines()
+  self._ttLines = {}
+end
+
+function AL_TT:AddLine(text, r, g, b)
+  if not self._ttLines then self._ttLines = {} end
+  self._ttLines[table.getn(self._ttLines) + 1] = { text=text, r=r or 1, g=g or 1, b=b or 1 }
+end
+
+function AL_TT:Show()
+  local lines = self._ttLines or {}
+  local n = table.getn(lines)
+  -- Title
+  AL_TT_title:SetWidth(0)
+  AL_TT_title:SetText(n >= 1 and lines[1].text or "")
+  if n >= 1 then AL_TT_title:SetTextColor(lines[1].r, lines[1].g, lines[1].b) end
+  -- Body (remaining lines joined)
+  AL_TT_body:SetWidth(0)
+  if n >= 2 then
+    local parts = {}
+    for i = 2, n do parts[i-1] = lines[i].text end
+    AL_TT_body:SetText(table.concat(parts, "\n"))
+    AL_TT_body:SetTextColor(0.9, 0.9, 0.9)
+  else
+    AL_TT_body:SetText("")
+  end
+  -- Measure using GetWidth/GetHeight (vanilla 1.12 – SetWidth(0) lets string expand freely)
+  local titleW = AL_TT_title:GetWidth()
+  local bodyW  = AL_TT_body:GetWidth()
+  local titleH = AL_TT_title:GetHeight()
+  local bodyH  = (n >= 2) and AL_TT_body:GetHeight() or 0
+  local gap    = (bodyH > 0) and 4 or 0
+  self:SetWidth(math.max(titleW, bodyW) + 16)
+  self:SetHeight(titleH + bodyH + gap + 16)
+  _AL_TT_NativeShow(self)
+end
+
+local function ShowTooltip(owner, title, body)
+  AL_TT:SetOwner(owner, "ANCHOR_RIGHT")
+  AL_TT:ClearLines()
+  AL_TT:AddLine(title, 1, 0.82, 0)
+  AL_TT:AddLine(body, 0.9, 0.9, 0.9)
+  AL_TT:Show()
+end
+
 local function GetActiveConfig()
   -- Gibt den gerade im UI geladenen Config zurück (Vorschau oder Combat-Config)
   local name = AutoLock._loadedConfigName or (AutoLockDB and AutoLockDB.activeConfig)
@@ -514,7 +597,10 @@ function AutoLock:PrioScrollUpdate()
         row.refreshBox:SetScript("OnEditFocusLost", function()
           local v = tonumber(this:GetText())
           local tgt = this.settingEntry
-          if tgt then tgt.refreshtime = v end
+          if tgt then
+            tgt.refreshtime = v
+            SaveCurrentConfigSpells()
+          end
         end)
       else
         row.refreshBox:Hide()
@@ -542,7 +628,7 @@ local dhDotsPopup = nil
 local function ShowDHDotsPopup(anchor)
   if not dhDotsPopup then
     dhDotsPopup = CreateFrame("Frame", "AutoLockDHDotsPopup", UIParent)
-    dhDotsPopup:SetWidth(220); dhDotsPopup:SetHeight(178)
+    dhDotsPopup:SetWidth(220); dhDotsPopup:SetHeight(212)
     dhDotsPopup:SetFrameStrata("TOOLTIP")
     dhDotsPopup:SetBackdrop({
       bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -552,6 +638,10 @@ local function ShowDHDotsPopup(anchor)
     })
     dhDotsPopup:SetBackdropColor(0.1, 0.1, 0.15, 1)
     dhDotsPopup:EnableMouse(true)
+    dhDotsPopup:SetMovable(true)
+    dhDotsPopup:RegisterForDrag("LeftButton")
+    dhDotsPopup:SetScript("OnDragStart", function() this:StartMoving() end)
+    dhDotsPopup:SetScript("OnDragStop",  function() this:StopMovingOrSizing() end)
 
     local title = dhDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     title:SetPoint("TOP", dhDotsPopup, "TOP", 0, -10)
@@ -562,7 +652,7 @@ local function ShowDHDotsPopup(anchor)
     closeBtn:SetPoint("TOPRIGHT", dhDotsPopup, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() dhDotsPopup:Hide() end)
 
-    local function makeDotCheck(key, label, prevAnchor, yOffset)
+    local function makeDotCheck(key, label, prevAnchor, yOffset, tooltip)
       local cb = CreateFrame("CheckButton", nil, dhDotsPopup, "UICheckButtonTemplate")
       cb:SetWidth(18); cb:SetHeight(18)
       if prevAnchor then
@@ -578,6 +668,10 @@ local function ShowDHDotsPopup(anchor)
         cfg.darkHarvestDots[key] = newVal
         cb:SetChecked(newVal and 1 or nil)
       end)
+      if tooltip then
+        cb:SetScript("OnEnter", function() ShowTooltip(this, label, tooltip) end)
+        cb:SetScript("OnLeave", function() AL_TT:Hide() end)
+      end
       local lbl = dhDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
       lbl:SetPoint("LEFT", cb, "RIGHT", 4, 0)
       lbl:SetText(label)
@@ -585,10 +679,42 @@ local function ShowDHDotsPopup(anchor)
       return cb
     end
 
-    dhDotsPopup.agonyCheck      = makeDotCheck("agony",      "Curse of Agony",       nil)
-    dhDotsPopup.corruptionCheck = makeDotCheck("corruption", "Corruption",            dhDotsPopup.agonyCheck)
-    dhDotsPopup.siphonCheck     = makeDotCheck("siphonLife", "Siphon Life",           dhDotsPopup.corruptionCheck)
-    dhDotsPopup.shadowVulnCheck = makeDotCheck("shadowVuln", "Shadow Vulnerability",  dhDotsPopup.siphonCheck)
+    dhDotsPopup.agonyCheck      = makeDotCheck("agony",      "Curse of Agony",
+      nil, nil, "Curse of Agony must be active on the\ntarget before Dark Harvest can be cast.")
+    dhDotsPopup.corruptionCheck = makeDotCheck("corruption", "Corruption",
+      dhDotsPopup.agonyCheck, nil, "Corruption must be active on the\ntarget before Dark Harvest can be cast.")
+    dhDotsPopup.siphonCheck     = makeDotCheck("siphonLife", "Siphon Life",
+      dhDotsPopup.corruptionCheck, nil, "Siphon Life must be active on the\ntarget before Dark Harvest can be cast.")
+    dhDotsPopup.shadowVulnCheck = makeDotCheck("shadowVuln", "Shadow Vulnerability",
+      dhDotsPopup.siphonCheck, nil, "Shadow Vulnerability must be active on the\ntarget before Dark Harvest can be cast.")
+
+    -- Divider
+    local divider = dhDotsPopup:CreateTexture(nil, "ARTWORK")
+    divider:SetHeight(1)
+    divider:SetWidth(190)
+    divider:SetPoint("TOPLEFT", dhDotsPopup.shadowVulnCheck, "BOTTOMLEFT", 0, -10)
+    divider:SetTexture(0.4, 0.4, 0.4, 0.8)
+
+    -- Nightfall checkbox (separate config key, not darkHarvestDots)
+    local nightfallCb = CreateFrame("CheckButton", nil, dhDotsPopup, "UICheckButtonTemplate")
+    nightfallCb:SetWidth(18); nightfallCb:SetHeight(18)
+    nightfallCb:SetPoint("TOPLEFT", divider, "BOTTOMLEFT", 0, -6)
+    nightfallCb:SetScript("OnClick", function()
+      local cfg = GetActiveConfig()
+      if not cfg then return end
+      local newVal = not (cfg.darkHarvestAllowNightfall == true)
+      cfg.darkHarvestAllowNightfall = newVal
+      nightfallCb:SetChecked(newVal and 1 or nil)
+    end)
+    local nightfallLbl = dhDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    nightfallLbl:SetPoint("LEFT", nightfallCb, "RIGHT", 4, 0)
+    nightfallLbl:SetText("Allow Nightfall interrupt")
+    nightfallCb:SetScript("OnEnter", function()
+      ShowTooltip(this, "Allow Nightfall interrupt",
+        "When checked, a Nightfall proc\n(Shadow Trance) interrupts the Dark\nHarvest channel and casts Shadow Bolt.")
+    end)
+    nightfallCb:SetScript("OnLeave", function() AL_TT:Hide() end)
+    dhDotsPopup.nightfallCheck = nightfallCb
 
   end
 
@@ -607,6 +733,7 @@ local function ShowDHDotsPopup(anchor)
   dhDotsPopup.corruptionCheck:SetChecked(dh.corruption and 1 or nil)
   dhDotsPopup.siphonCheck:SetChecked(dh.siphonLife and 1 or nil)
   dhDotsPopup.shadowVulnCheck:SetChecked(dh.shadowVuln and 1 or nil)
+  dhDotsPopup.nightfallCheck:SetChecked(cfg and cfg.darkHarvestAllowNightfall and 1 or nil)
 
   dhDotsPopup:Show()
 end
@@ -629,17 +756,21 @@ local function ShowDSDotsPopup(anchor)
     })
     dsDotsPopup:SetBackdropColor(0.1, 0.1, 0.15, 1)
     dsDotsPopup:EnableMouse(true)
+    dsDotsPopup:SetMovable(true)
+    dsDotsPopup:RegisterForDrag("LeftButton")
+    dsDotsPopup:SetScript("OnDragStart", function() this:StartMoving() end)
+    dsDotsPopup:SetScript("OnDragStop",  function() this:StopMovingOrSizing() end)
 
     local title = dsDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     title:SetPoint("TOP", dsDotsPopup, "TOP", 0, -10)
-    title:SetText("Drain Soul requires DoTs:")
+    title:SetText("Allow renewal during DS channel:")
 
     local closeBtn = CreateFrame("Button", nil, dsDotsPopup, "UIPanelCloseButton")
     closeBtn:SetWidth(18); closeBtn:SetHeight(18)
     closeBtn:SetPoint("TOPRIGHT", dsDotsPopup, "TOPRIGHT", -2, -2)
     closeBtn:SetScript("OnClick", function() dsDotsPopup:Hide() end)
 
-    local function makeDSCheck(key, label, prevAnchor)
+    local function makeDSCheck(key, label, prevAnchor, tooltip)
       local cb = CreateFrame("CheckButton", nil, dsDotsPopup, "UICheckButtonTemplate")
       cb:SetWidth(18); cb:SetHeight(18)
       if prevAnchor then
@@ -655,6 +786,10 @@ local function ShowDSDotsPopup(anchor)
         cfg.drainSoulDots[key] = newVal
         cb:SetChecked(newVal and 1 or nil)
       end)
+      if tooltip then
+        cb:SetScript("OnEnter", function() ShowTooltip(this, label, tooltip) end)
+        cb:SetScript("OnLeave", function() AL_TT:Hide() end)
+      end
       local lbl = dsDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
       lbl:SetPoint("LEFT", cb, "RIGHT", 4, 0)
       lbl:SetText(label)
@@ -662,9 +797,12 @@ local function ShowDSDotsPopup(anchor)
       return cb
     end
 
-    dsDotsPopup.agonyCheck      = makeDSCheck("agony",      "Curse of Agony",  nil)
-    dsDotsPopup.corruptionCheck = makeDSCheck("corruption", "Corruption",       dsDotsPopup.agonyCheck)
-    dsDotsPopup.siphonCheck     = makeDSCheck("siphonLife", "Siphon Life",      dsDotsPopup.corruptionCheck)
+    dsDotsPopup.agonyCheck      = makeDSCheck("agony",      "Curse of Agony",
+      nil, "Checked: Curse of Agony and Curse of Shadow\ncan be renewed during Drain Soul.\nUnchecked: both are blocked to avoid\ninterrupting the channel.")
+    dsDotsPopup.corruptionCheck = makeDSCheck("corruption", "Corruption",
+      dsDotsPopup.agonyCheck, "Checked: Corruption can be renewed\nduring Drain Soul.\nUnchecked: blocked to avoid interrupting\nthe channel.")
+    dsDotsPopup.siphonCheck     = makeDSCheck("siphonLife", "Siphon Life",
+      dsDotsPopup.corruptionCheck, "Checked: Siphon Life can be renewed\nduring Drain Soul.\nUnchecked: blocked to avoid interrupting\nthe channel.")
   end
 
   if dsDotsPopup:IsShown() and dsDotsPopup.anchor == anchor then
@@ -909,6 +1047,19 @@ local function CreatePrioUIOnce(parent)
         ShowDSDotsPopup(row.cfgBtn)
       end
     end)
+    row.cfgBtn:SetScript("OnEnter", function()
+      if not row.entry then return end
+      if row.entry.name == "Dark Harvest" then
+        ShowTooltip(this, "Dark Harvest – DoT Requirements",
+          "Check which DoTs must be active\non the target before Dark Harvest\ncan be cast.")
+      elseif row.entry.name == "Drain Soul" then
+        ShowTooltip(this, "Drain Soul – Curse Renewal",
+          "Check which curses are allowed\nto be renewed while Drain Soul\nis channeling.")
+      end
+    end)
+    row.cfgBtn:SetScript("OnLeave", function()
+      AL_TT:Hide()
+    end)
     row.cfgBtn:Hide()
 
     -- Delete-Button
@@ -1152,6 +1303,11 @@ function AutoLock:CreateUI()
   shardCheck:SetScript("OnClick", function()
     AutoLockDB.settings.autoDeleteShards = (this:GetChecked() and true) or false
   end)
+  shardCheck:SetScript("OnEnter", function()
+    ShowTooltip(this, "Auto-delete Soul Shards",
+      "Automatically deletes Soul Shards from\nnon-soul bags when your Soul Bag is full.")
+  end)
+  shardCheck:SetScript("OnLeave", function() AL_TT:Hide() end)
   local shardLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   shardLbl:SetPoint("LEFT", shardCheck, "RIGHT", 4, 0)
   shardLbl:SetWidth(310)
@@ -1165,6 +1321,11 @@ function AutoLock:CreateUI()
   lifeTapCheck:SetScript("OnClick", function()
     AutoLockDB.settings.useLifeTap = (this:GetChecked() and true) or false
   end)
+  lifeTapCheck:SetScript("OnEnter", function()
+    ShowTooltip(this, "Use Life Tap",
+      "Automatically casts Life Tap before a\nspell when mana is insufficient.\nStops if health is too low.")
+  end)
+  lifeTapCheck:SetScript("OnLeave", function() AL_TT:Hide() end)
   local lifeTapLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   lifeTapLbl:SetPoint("LEFT", lifeTapCheck, "RIGHT", 4, 0)
   lifeTapLbl:SetWidth(310)
@@ -1179,6 +1340,11 @@ function AutoLock:CreateUI()
     AutoLockDB.settings.hideUnknownSpells = (this:GetChecked() and true) or false
     AutoLock:PrioScrollUpdate()
   end)
+  hideUnknownCheck:SetScript("OnEnter", function()
+    ShowTooltip(this, "Hide unknown spells",
+      "Hides spells in the list that are not\nin your current spellbook\n(e.g. not yet learned).")
+  end)
+  hideUnknownCheck:SetScript("OnLeave", function() AL_TT:Hide() end)
   local hideUnknownLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   hideUnknownLbl:SetPoint("LEFT", hideUnknownCheck, "RIGHT", 4, 0)
   hideUnknownLbl:SetWidth(310)
@@ -1202,13 +1368,13 @@ function AutoLock:CreateUI()
     AutoLockLog.Info(PAYPAL_URL)
   end)
   coffeeBtn:SetScript("OnEnter", function()
-    GameTooltip:SetOwner(this, "ANCHOR_TOP")
-    GameTooltip:SetText("Buy me a Coffee", 1, 0.82, 0)
-    GameTooltip:AddLine("Click to print the PayPal link to chat.", 0.9, 0.9, 0.9)
-    GameTooltip:AddLine(PAYPAL_URL, 0.5, 0.8, 1)
-    GameTooltip:Show()
+    AL_TT:SetOwner(this, "ANCHOR_TOP")
+    AL_TT:ClearLines(); AL_TT:AddLine("Buy me a Coffee", 1, 0.82, 0)
+    AL_TT:AddLine("Click to print the PayPal link to chat.", 0.9, 0.9, 0.9)
+    AL_TT:AddLine(PAYPAL_URL, 0.5, 0.8, 1)
+    AL_TT:Show()
   end)
-  coffeeBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  coffeeBtn:SetScript("OnLeave", function() AL_TT:Hide() end)
 
   -- Sync checkbox states when the panel opens
   settingsPanel:SetScript("OnShow", function()
@@ -1678,13 +1844,13 @@ function AutoLock:CreateMinimapButton()
   end)
 
   miniBtn:SetScript("OnEnter", function()
-    GameTooltip:SetOwner(this, "ANCHOR_LEFT")
-    GameTooltip:SetText("AutoLock", 1, 1, 1)
-    GameTooltip:AddLine("Click: Open spell priority UI", .9, .9, .9)
-    GameTooltip:AddLine("Drag: Reposition button", .9, .9, .9)
-    GameTooltip:Show()
+    AL_TT:SetOwner(this, "ANCHOR_LEFT")
+    AL_TT:ClearLines(); AL_TT:AddLine("AutoLock", 1, 1, 1)
+    AL_TT:AddLine("Click: Open spell priority UI", .9, .9, .9)
+    AL_TT:AddLine("Drag: Reposition button", .9, .9, .9)
+    AL_TT:Show()
   end)
-  miniBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+  miniBtn:SetScript("OnLeave", function() AL_TT:Hide() end)
 
   miniBtn:SetScript("OnClick", function() AutoLock:ToggleUI() end)
 end
@@ -1872,19 +2038,19 @@ function AutoLockRefreshConfigList()
     local cfgRef = cfg
 
     btn:SetScript("OnEnter", function()
-      GameTooltip:SetOwner(this, "ANCHOR_RIGHT")
-      GameTooltip:SetText(cfgRef.name, 1, 0.82, 0)
-      GameTooltip:AddLine("Left-click: View in UI", 0.9, 0.9, 0.9)
-      GameTooltip:AddLine("Drag: Bind to action bar", 0.9, 0.9, 0.9)
-      GameTooltip:AddLine("Right-click: Edit", 0.9, 0.9, 0.9)
-      GameTooltip:AddLine("Shift + right-click: Delete", 0.9, 0.9, 0.9)
+      AL_TT:SetOwner(this, "ANCHOR_RIGHT")
+      AL_TT:ClearLines(); AL_TT:AddLine(cfgRef.name, 1, 0.82, 0)
+      AL_TT:AddLine("Left-click: View in UI", 0.9, 0.9, 0.9)
+      AL_TT:AddLine("Drag: Bind to action bar", 0.9, 0.9, 0.9)
+      AL_TT:AddLine("Right-click: Edit", 0.9, 0.9, 0.9)
+      AL_TT:AddLine("Shift + right-click: Delete", 0.9, 0.9, 0.9)
       if AutoLock._combatConfigName == cfgRef.name then
-        GameTooltip:AddLine("[Active combat config]", 0, 1, 0)
+        AL_TT:AddLine("[Active combat config]", 0, 1, 0)
       end
-      GameTooltip:Show()
+      AL_TT:Show()
     end)
     btn:SetScript("OnLeave", function()
-      GameTooltip:Hide()
+      AL_TT:Hide()
     end)
 
     btn:SetScript("OnDragStart", function()
@@ -1983,7 +2149,7 @@ function AutoLockNewConfigPopup_Save()
         return
       end
     end
-    local newCfg = { name=name, icon=AutoLockSelectedIcon or 1, spells=SnapshotSpells() }
+    local newCfg = { name=name, icon=AutoLockSelectedIcon or 1, spells=SnapshotSpells(), drainSoulDots={ agony=true, corruption=true, siphonLife=true } }
     table.insert(AutoLockDB.configs, newCfg)
     AutoLockNewConfigFrame:Hide()  -- triggers OnHide (clears editbox + icon)
     LoadConfig(newCfg)
@@ -2007,7 +2173,7 @@ function AutoLock:InitConfigs()
     -- Seed a "Default" config from the current SPELL_PRIORITY state.
     SortByPriorityNumbers()
     RenumberPriorities()
-    table.insert(AutoLockDB.configs, { name="Default", icon=1, spells=SnapshotSpells() })
+    table.insert(AutoLockDB.configs, { name="Default", icon=1, spells=SnapshotSpells(), drainSoulDots={ agony=true, corruption=true, siphonLife=true } })
     AutoLockDB.activeConfig = "Default"
   end
   local cfg = GetActiveConfig()
