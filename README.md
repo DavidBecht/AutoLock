@@ -16,6 +16,8 @@
   - [Conditions](#conditions)
   - [Settings Panel](#settings-panel)
 - [Default Spell Rotation](#default-spell-rotation)
+- [Drain Soul Config (DS Cfg)](#drain-soul-config-ds-cfg)
+- [Dark Harvest Config (DH Cfg)](#dark-harvest-config-dh-cfg)
 - [Config System](#config-system)
 - [Minimap Button](#minimap-button)
 - [SpellBook Button](#spellbook-button)
@@ -105,6 +107,8 @@ Each row in the list represents one spell entry.
 
 Use the **Show Disabled** checkbox at the top-left to show or hide disabled spells. Click **Apply** to force-refresh the list after making changes.
 
+Changes to the **Prio** or **Refresh** fields are saved automatically when you leave the input box.
+
 ### Conditions
 
 > NOT IMPLEMENTED YET. NOT WORKING
@@ -134,6 +138,7 @@ Click the **Settings** button (bottom of the main window) to open the settings p
 |---|---|---|
 | **Auto-delete Soul Shards when Soul Bag is full** | On | When your Soul Bag fills up, shards sitting in normal bags are automatically deleted on `BAG_UPDATE` |
 | **Use Life Tap when low on mana** | On | Automatically casts Life Tap when your mana is too low for the next spell in the rotation |
+| **Hide spells not in spellbook** | Off | Hides rotation entries whose spell you haven't learned yet |
 
 Settings are saved to `AutoLockDB.settings` and persist between sessions.
 
@@ -151,7 +156,7 @@ The table below lists every spell entry that ships with AutoLock, sorted by defa
 | 6 | Curse of Shadow | curse | ✅ | Via Cursive |
 | 7 | Curse of Agony | curse | ✅ | Via Cursive |
 | 8 | Corruption | curse | ✅ | Via Cursive |
-| 9 | Siphon Life | curse | ✅ | Via Cursive; skipped while Drain Soul is channeling |
+| 9 | Siphon Life | curse | ✅ | Via Cursive; configurable per DS-config whether renewed during Drain Soul channel |
 | 10 | Curse of Recklessness | curse | ❌ | Situational |
 | 11 | Curse of Weakness | curse | ❌ | Situational |
 | 12 | Curse of Tongues | curse | ❌ | Situational |
@@ -162,12 +167,39 @@ The table below lists every spell entry that ships with AutoLock, sorted by defa
 | 19 | Conflagrate | cast | ❌ | Skipped while moving; checks cooldown |
 | 20 | Death Coil | cast | ✅ | Only fires when off cooldown |
 | 21 | Shadowburn | cast | ✅ | Only fires when off cooldown |
-| 22 | Dark Harvest | cast | ❌ | TurtleWoW custom spell; skipped while moving or channeling |
-| 23 | Drain Soul | cast | ✅ | Skipped while moving; waits for previous channel to finish |
+| 22 | Dark Harvest | cast | ❌ | TurtleWoW custom spell; skipped while moving or channeling; has its own **Cfg** popup |
+| 23 | Drain Soul | cast | ✅ | Skipped while moving; waits for previous channel to finish; has its own **Cfg** popup |
 | 30 | Shadow Bolt (filler) | cast | ❌ | Skipped while moving |
 | 32 | Searing Pain | cast | ❌ | Skipped while moving |
 | 99 | Shoot (Wand) | cast | ❌ | Fallback; skipped while already shooting or moving |
 
+
+## Drain Soul Config (DS Cfg)
+
+Click the **Cfg** button next to *Drain Soul* in the spell list to open the DS configuration popup.
+
+This lets you choose which dots AutoLock is allowed to renew **while Drain Soul is actively channeling**. Renewing a curse mid-channel interrupts the channel — uncheck a dot to keep the channel running uninterrupted.
+
+| Checkbox | Default | Effect |
+|---|---|---|
+| **Curse of Agony / Curse of Shadow** | ✅ | Allowed to refresh during DS channel |
+| **Corruption** | ✅ | Allowed to refresh during DS channel |
+| **Siphon Life** | ✅ | Allowed to refresh during DS channel |
+
+The popup is draggable.
+
+## Dark Harvest Config (DH Cfg)
+
+Click the **Cfg** button next to *Dark Harvest* to open the DH configuration popup.
+
+| Checkbox | Default | Effect |
+|---|---|---|
+| **Corruption** | ✅ | Required dot before DH is cast |
+| **Curse of Agony / Curse of Shadow** | ✅ | Required dot before DH is cast |
+| **Siphon Life** | ✅ | Required dot before DH is cast |
+| **Allow Nightfall proc during channel** | ❌ | When checked, a Shadow Trance (Nightfall) proc at priority 1 is allowed to fire and interrupt the DH channel |
+
+The popup is draggable.
 
 ## Config System
 
@@ -234,7 +266,7 @@ When `AutoLock:DoAutoLock()` is called (via keybind macro or the spellbook butto
 DoAutoLock()
   └─ for each entry in priority order:
        1. Skip if disabled
-       2. Skip if Dark Harvest is still channeling
+       2. Skip if Dark Harvest is still channeling (unless Nightfall proc is allowed via DH Cfg)
        3. Skip if the spell's custom condition() returns false
           (Shadow Trance proc, cooldown, movement, HP/mana thresholds…)
        4. Skip if out of range  (requires the spell to be on an action bar slot)
