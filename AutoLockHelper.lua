@@ -58,13 +58,22 @@ end
 
 -- Liest die Channel/Cast-Dauer eines Spells per Tooltip
 function AutoLock:GetSpellDurationByName(spellName)
-    -- Tooltip-Frame vorbereiten
+    -- Problem 5: Nampower exposes GetSpellDuration(spellId) in milliseconds,
+    -- bypassing the tooltip-scan which is locale-dependent ("over X sec" / "X Sek").
+    if GetSpellSlotTypeIdForName and GetSpellDuration then
+        local _, _, spellId = GetSpellSlotTypeIdForName(spellName)
+        if spellId and spellId ~= 0 then
+            local ms = GetSpellDuration(spellId)
+            if ms and ms > 0 then return ms / 1000 end
+        end
+    end
+
+    -- Fallback: tooltip scan (locale-dependent, enUS + deDE covered).
     local tt = AutoLock_DurationTooltip or CreateFrame(
         "GameTooltip", "AutoLock_DurationTooltip", nil, "GameTooltipTemplate"
     )
     AutoLock_DurationTooltip = tt
 
-    -- Höchsten Rank nutzen
     local slot = FindLastRankSlot(spellName)
     if not slot then return nil end
 
@@ -72,18 +81,14 @@ function AutoLock:GetSpellDurationByName(spellName)
     tt:ClearLines()
     tt:SetSpell(slot, BOOKTYPE_SPELL)
 
-    -- Tooltip durchsuchen
     for i = 2, tt:NumLines() do
         local line = _G["AutoLock_DurationTooltipTextLeft"..i]
         if line then
             local text = line:GetText()
             if text then
-                -- Sucht "... over 15 sec" → liefert "15"
                 local _, _, secs = strfind(string.lower(text), "over%s+(%d+%.?%d*)%s+sec")
                 if secs then return tonumber(secs) end
 
-                -- Fallback für andere Sprachen:
-                -- "über 15 Sekunden" etc.
                 local _, _, secs2 = strfind(string.lower(text), "(%d+)%s+sek")
                 if secs2 then return tonumber(secs2) end
             end
@@ -198,20 +203,31 @@ end
 
 -- Hilfsfunktion: Mana-Kosten lesen
 function AutoLock:GetSpellManaCostByName(spellName)
-  -- Cache-Key
   local key = "LAST:"..spellName
   if AutoLock_ManaCostCache[key] ~= nil then
-    -- print("from cache")
     return AutoLock_ManaCostCache[key]
   end
 
+  -- Problem 4: Nampower provides direct DBC access via GetSpellRec(spellId).manaCost,
+  -- bypassing the tooltip-scan which is locale-dependent and creates tooltip frames.
+  if GetSpellSlotTypeIdForName and GetSpellRec then
+    local _, _, spellId = GetSpellSlotTypeIdForName(spellName)
+    if spellId and spellId ~= 0 then
+      local rec = GetSpellRec(spellId)
+      if rec and rec.manaCost then
+        AutoLock_ManaCostCache[key] = rec.manaCost
+        return rec.manaCost
+      end
+    end
+  end
+
+  -- Fallback: tooltip scan (locale-dependent, enUS covered).
   local slot = FindLastRankSlot(spellName)
   if not slot then
     AutoLockLog.Warning("Spell not found: " .. spellName)
     return nil
   end
 
-  -- Tooltip vorbereiten
   local tt = AutoLock_ScanTooltip or CreateFrame("GameTooltip","AutoLock_ScanTooltip",nil,"GameTooltipTemplate")
   tt:SetOwner(UIParent,"ANCHOR_NONE")
   tt:ClearLines()
@@ -385,6 +401,14 @@ function AutoLock:DeleteSoulShards()
 end
 
 function AutoLock:IsTrinketReady(slot)
+    -- Problem 7: Nampower provides GetTrinketCooldown(slot) which returns the
+    -- remaining cooldown in seconds, or -1 if no trinket is equipped in that slot.
+    if GetTrinketCooldown then
+        local cd = GetTrinketCooldown(slot)
+        if cd == -1 then return false end  -- no trinket equipped
+        return cd == 0
+    end
+    -- Fallback: vanilla inventory cooldown query.
     local start, duration, enable = GetInventoryItemCooldown("player", slot)
     if enable == 1 and duration == 0 then
         return true
@@ -452,6 +476,16 @@ end
 function AutoLock:IsSpellOutOfRange(spellName)
   if not self:HasTarget() then return false end
 
+  -- Problem 2: Nampower provides IsSpellInRange(name, unit) — no action slot needed.
+  -- Returns 1 (in range), 0 (out of range), -1 (invalid: spell unknown, no target).
+  if IsSpellInRange then
+    local r = IsSpellInRange(spellName, "target")
+    if r == 1 then return false end
+    if r == 0 then return true end
+    -- r == -1: spell not known or no valid target; fall through to slot-based check.
+  end
+
+  -- Fallback: scan action slots 1-120 and use vanilla IsActionInRange.
   local slot = self:FindActionSlotBySpellName(spellName)
   if not slot then return nil end
 

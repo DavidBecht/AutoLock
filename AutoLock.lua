@@ -120,6 +120,10 @@ function AutoLock:OnEnable()
     AutoLockLog.Warning("Cursive not found. Curse spells in the rotation will be skipped.")
   end
 
+  if not GetCurrentCastingInfo then
+    AutoLockLog.Warning("Nampower not detected. Spell queueing conflicts possible when spam-casting.")
+  end
+
 	self:InitUI()
 	self:BuildKnownSpellSet()
 end
@@ -320,6 +324,7 @@ f:SetScript("OnEvent", function()
     end
     DrainSoulChanneling = false
 		DarkHarvestChanneling = false
+		AutoLock._npQueuedThisCast = false  -- Problem 1: cast finished, allow re-evaluation
 
   elseif E == "SPELLCAST_FAILED" or E == "SPELLCAST_INTERRUPTED" then
 		DarkHarvestChanneling = false
@@ -327,6 +332,7 @@ f:SetScript("OnEvent", function()
 		WandShooting = false
 		DoLock_OnCooldownUntil = 0
 		ImmolateTargetGUID = nil
+		AutoLock._npQueuedThisCast = false  -- Problem 1: cast failed, allow re-evaluation
 
   elseif E == "SPELLCAST_CHANNEL_START" then
     if SpellStartedName == DRAIN_SOUL_NAME then
@@ -346,6 +352,7 @@ f:SetScript("OnEvent", function()
 			DrainSoulChanneling = false
 			DarkHarvestChanneling = false
 			WandShooting = false
+			AutoLock._npQueuedThisCast = false  -- Problem 1: channel finished, allow re-evaluation
 
 
   elseif E == "START_AUTOREPEAT_SPELL" then
@@ -369,6 +376,15 @@ end)
 -- =========================
 -- Give each spell a "priority" number. Lower = higher priority.
 -- You can change just the numbers instead of reordering the table.
+
+-- Problem 3: Movement detection — prefer Nampower's direct C-side query over
+-- the 100ms map-position polling in Movement.lua when available.
+local function IsPlayerMoving()
+  if PlayerIsMoving then return PlayerIsMoving() == 1 end
+  if MovementEvents then return MovementEvents:IsMoving() end
+  return false
+end
+
 local function IsShadowTranceProc()
     local hasBuff = AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight")
 		if hasBuff then
@@ -380,21 +396,32 @@ local function IsShadowTranceProc()
 end
 
 local function drainSoulChannelingFinished()
-	if DrainSoulChanneling then
-		local remain = (DrainSoulCastedAt + DrainSoulDuration) - GetTime()
-		-- print("Remain:", remain, "Channel:", DrainSoulChanneling)
-		return (remain <= 0.04) 
+	if not DrainSoulChanneling then return true end
+	-- Problem 6: Nampower can authoritatively tell us if a channel is still active.
+	-- If nampower says no channel is running, trust it and sync our flag.
+	if GetCurrentCastingInfo then
+		local _, channeling = GetCurrentCastingInfo()
+		if not channeling then
+			DrainSoulChanneling = false
+			return true
+		end
 	end
-	return true
+	local remain = (DrainSoulCastedAt + DrainSoulDuration) - GetTime()
+	return (remain <= 0.04)
 end
 
 local function darkHarvestChannelingFinished()
-	if DarkHarvestChanneling then
-		local remain = (DarkHarvestCastedAt + DarkHarvestDuration) - GetTime()
-		-- print("Remain:", remain, "Channel:", DrainSoulChanneling)
-		return (remain <= 0.04) 
+	if not DarkHarvestChanneling then return true end
+	-- Problem 6: same as above for Dark Harvest.
+	if GetCurrentCastingInfo then
+		local _, channeling = GetCurrentCastingInfo()
+		if not channeling then
+			DarkHarvestChanneling = false
+			return true
+		end
 	end
-	return true
+	local remain = (DarkHarvestCastedAt + DarkHarvestDuration) - GetTime()
+	return (remain <= 0.04)
 end
 
 SPELL_PRIORITY = {
@@ -493,7 +520,7 @@ SPELL_PRIORITY = {
 		target = "target", 
 		enabled = false,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			local onCD, rankStr = AutoLock:IsOnCooldown("Soul Fire")
 			if onCD then return false end
 			return true
@@ -512,7 +539,7 @@ SPELL_PRIORITY = {
 			if DoLock_OnCooldownUntil > 0 and _targetGUID == ImmolateTargetGUID then
 				if GetTime() < DoLock_OnCooldownUntil then return false end
 			end
-      if MovementEvents and MovementEvents:IsMoving() then return false end
+      if IsPlayerMoving() then return false end
       return true
     end,
     
@@ -525,7 +552,7 @@ SPELL_PRIORITY = {
 		target = "target", 
 		enabled = false,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			local onCD, rankStr = AutoLock:IsOnCooldown("Conflagrate")
 			if onCD then return false end
 			return true
@@ -564,7 +591,7 @@ SPELL_PRIORITY = {
 		target = "target", 
 		enabled = false, 
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			local onCD, rankStr = AutoLock:IsOnCooldown("Dark Harvest")
 			if onCD then return false end
 			if not darkHarvestDotsReady() then return false end
@@ -578,7 +605,7 @@ SPELL_PRIORITY = {
 		target = "target",
 		enabled = true,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			return drainSoulChannelingFinished()
 		end,
 	},
@@ -591,7 +618,7 @@ SPELL_PRIORITY = {
 		target = "target", 
 		enabled = false,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			return true
 		end,
 	},
@@ -605,7 +632,7 @@ SPELL_PRIORITY = {
 		target = "target", 
 		enabled = false,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			return true
 		end,
 	},
@@ -620,7 +647,7 @@ SPELL_PRIORITY = {
 		uitext    = "Shoot (Wand)",
 		condition = function(unit)
 			if WandShooting then return false end   -- Kern: nicht doppelt starten
-			if MovementEvents and MovementEvents:IsMoving() then return false end -- optional
+			if IsPlayerMoving() then return false end -- optional
 			return true
 		end,
 		enabled = false,
@@ -737,7 +764,12 @@ local function TryAction(entry)
         ok = true
       end
   end
-	if ok then SpellStartedName = entry.name end
+	if ok then
+		SpellStartedName = entry.name
+		-- Problem 1: Signal that a spell was queued this cast cycle so DoAutoLock
+		-- can bail out on subsequent macro presses and not overwrite the queue.
+		AutoLock._npQueuedThisCast = true
+	end
   return ok
 end
 
@@ -748,6 +780,20 @@ end
 -- without affecting SPELL_PRIORITY or the UI selection.
 -- Macros generated by AutoLock always pass a configName.
 function AutoLock:DoAutoLock(configName)
+  -- Problem 1: Nampower queue guard.
+  -- When the player spam-presses the macro, DoAutoLock fires on every press.
+  -- Without this guard each press calls CastSpellByName with a potentially
+  -- different spell, which overwrites the nampower queue non-deterministically.
+  -- Fix: once we queued a spell this cast cycle (_npQueuedThisCast=true), bail
+  -- out immediately as long as nampower confirms a cast is still in flight.
+  -- Channels are excluded: DoAutoLock must keep running during channels so the
+  -- DS/DH conditions can evaluate and queue the next spell near channel end.
+  if self._npQueuedThisCast and GetCurrentCastingInfo then
+    local casting, channeling = GetCurrentCastingInfo()
+    if casting and not channeling then return end
+    -- Cast finished or it's a channel → clear flag and fall through normally.
+    self._npQueuedThisCast = false
+  end
   if configName then
     if self._combatConfigName ~= configName then
       self:_loadCombatSnapshot(configName)
