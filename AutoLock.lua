@@ -723,9 +723,9 @@ local function TryAction(entry)
 		local outOfRange = AutoLock:IsSpellOutOfRange(entry.name)
 		if outOfRange == true then
 			return false
-		elseif outOfRange == nil then 
-			AutoLockLog.Warning("No Action-Slot for spell " .. entry.name .. " found! Range check not possible")
 		end
+		-- outOfRange == nil means no range data available (spell not on action bar,
+		-- Nampower returned -1). We proceed and let the server reject if out of range.
 		
 		local manaCostNextSpell =  AutoLock:GetSpellManaCostByName(entry.name)
 		local playerMana = UnitMana("player")
