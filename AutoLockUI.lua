@@ -1936,6 +1936,47 @@ function AutoLockNewConfigPopupButton_OnClick()
 end
 
 -- =========================
+-- Drag-visual: floating icon frame that follows the cursor so the user
+-- clearly sees what is being dragged (WoW 1.12 only changes the cursor
+-- icon subtly; a floating frame is far more visible).
+-- =========================
+local _dragFrame, _dragTex, _draggingActive = nil, nil, false
+
+local function AL_CreateDragFrame()
+  if _dragFrame then return end
+  _dragFrame = CreateFrame("Frame", "AutoLockDragFrame", UIParent)
+  _dragFrame:SetWidth(36); _dragFrame:SetHeight(36)
+  _dragFrame:SetFrameStrata("TOOLTIP")
+  _dragFrame:EnableMouse(false)
+  _dragTex = _dragFrame:CreateTexture(nil, "ARTWORK")
+  _dragTex:SetAllPoints(_dragFrame)
+  _dragFrame:SetScript("OnUpdate", function()
+    if not _draggingActive then return end
+    local cx, cy = GetCursorPosition()
+    local s = UIParent:GetEffectiveScale and UIParent:GetEffectiveScale() or UIParent:GetScale()
+    _dragFrame:ClearAllPoints()
+    _dragFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", cx / s, cy / s)
+  end)
+  _dragFrame:Hide()
+end
+
+local function AL_ShowDragIcon(tex)
+  AL_CreateDragFrame()
+  _dragTex:SetTexture(tex)
+  _draggingActive = true
+  local cx, cy = GetCursorPosition()
+  local s = UIParent:GetEffectiveScale and UIParent:GetEffectiveScale() or UIParent:GetScale()
+  _dragFrame:ClearAllPoints()
+  _dragFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", cx / s, cy / s)
+  _dragFrame:Show()
+end
+
+local function AL_HideDragIcon()
+  _draggingActive = false
+  if _dragFrame then _dragFrame:Hide() end
+end
+
+-- =========================
 -- Config macro pickup helper
 -- =========================
 local function AutoLockPickupConfigMacro(cfg)
@@ -1944,18 +1985,8 @@ local function AutoLockPickupConfigMacro(cfg)
     return
   end
   local macroName = "AL:" .. string.sub(cfg.name, 1, 12)
-  -- EditMacro wants the integer icon index; CreateMacro needs the texture name string.
-  local iconIndex = cfg.icon or 1
-  local iconStr   = "INV_Misc_QuestionMark"
-  if cfg.icon and cfg.icon > 0 and GetMacroIconInfo then
-    local tex = GetMacroIconInfo(cfg.icon)
-    if tex and tex ~= "" then
-      -- GetMacroIconInfo returns either "Interface\\Icons\\NAME" or bare "NAME"
-      local _, _, bare = strfind(tex, "([^\\]+)$")
-      iconStr = bare or tex
-    end
-  end
-  local macroBody = '/run AutoLock:DoAutoLock("'..cfg.name..'")'
+  local iconIndex  = cfg.icon or 1
+  local macroBody  = '/run AutoLock:DoAutoLock("'..cfg.name..'")'
   local id = GetMacroIndexByName(macroName)
   if id and id > 0 then
     pcall(function() EditMacro(id, macroName, iconIndex, macroBody, 1) end)
@@ -1965,9 +1996,8 @@ local function AutoLockPickupConfigMacro(cfg)
       AutoLockLog.Warning("No free macro slots.")
       return
     end
-    -- Prefer character macro; fall back to global if character slots are full.
     local perChar = ((charCount or 0) < 18) and 1 or 0
-    id = CreateMacro(macroName, iconStr, macroBody, perChar)
+    id = CreateMacro(macroName, iconIndex, macroBody, perChar)
     if not id then
       AutoLockLog.Error("Could not create macro.")
       return
@@ -2068,16 +2098,19 @@ function AutoLockRefreshConfigList()
       AL_TT:Hide()
     end)
 
-    -- Real WoW drag-and-drop: hold + move → OnDragStart fires → macro on cursor
-    -- → release over action bar slot → slot fires OnReceiveDrag → macro placed.
-    -- The flag prevents the parent AutoLockFrame's OnDragStart (StartMoving) from
-    -- firing at the same time (which would move the whole window while dragging).
+    -- Real WoW drag-and-drop: hold + move → OnDragStart → macro picked up
+    -- → release over action bar slot → OnReceiveDrag → macro placed.
+    -- Flag prevents parent AutoLockFrame's OnDragStart (StartMoving) firing.
+    -- Floating drag frame gives visible feedback (cursor icon alone is subtle).
+    local cfgIconTex = iconResult  -- captured per-button for the drag visual
     btn:SetScript("OnDragStart", function()
       AutoLock._configDragging = true
       AutoLockPickupConfigMacro(cfgRef)
+      AL_ShowDragIcon(cfgIconTex)
     end)
     btn:SetScript("OnDragStop", function()
       AutoLock._configDragging = false
+      AL_HideDragIcon()
     end)
 
     btn:SetScript("OnClick", function()
