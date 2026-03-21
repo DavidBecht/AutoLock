@@ -1952,7 +1952,9 @@ local function AutoLockPickupConfigMacro(cfg)
       AutoLockLog.Warning("No free macro slots.")
       return
     end
-    id = CreateMacro(macroName, iconIndex, macroBody, 1)
+    -- Prefer character macro; fall back to global if character slots are full.
+    local perChar = ((charCount or 0) < 18) and 1 or 0
+    id = CreateMacro(macroName, iconIndex, macroBody, perChar)
     if not id then
       AutoLockLog.Error("Could not create macro.")
       return
@@ -1988,7 +1990,6 @@ function AutoLockRefreshConfigList()
     btn:SetPoint("TOPLEFT", configStrip, "TOPLEFT", x, -2)
     btn:EnableMouse(true)
     btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    btn:RegisterForDrag("LeftButton")
 
     -- isUIShown: this config is currently displayed in the UI (for editing/viewing)
     local isUIShown = (AutoLock._loadedConfigName == cfg.name) or
@@ -2053,8 +2054,14 @@ function AutoLockRefreshConfigList()
       AL_TT:Hide()
     end)
 
-    btn:SetScript("OnDragStart", function()
-      AutoLockPickupConfigMacro(cfgRef)
+    -- OnMouseDown picks up the macro immediately so the user can drag it to the
+    -- action bar without relying on OnDragStart.  Using RegisterForDrag +
+    -- OnDragStart caused the parent frame's StartMoving() to fire instead (both
+    -- frame and button were registered for LeftButton drag at the same level).
+    btn:SetScript("OnMouseDown", function()
+      if arg1 == "LeftButton" then
+        AutoLockPickupConfigMacro(cfgRef)
+      end
     end)
 
     btn:SetScript("OnClick", function()
@@ -2066,7 +2073,8 @@ function AutoLockRefreshConfigList()
         else
           AutoLockOpenEditConfig(cfgRef)
         end
-      else  -- LeftButton
+      else  -- LeftButton: cursor was picked up on MouseDown; clear it for a plain click
+        if ClearCursor then ClearCursor() end
         if not shift then
           PreviewConfig(cfgRef)
         end
