@@ -1105,7 +1105,10 @@ function AutoLock:CreateUI()
   frame:SetMovable(true)
   frame:EnableMouse(true)
   frame:RegisterForDrag("LeftButton")
-  frame:SetScript("OnDragStart", function() this:StartMoving() end)
+  frame:SetScript("OnDragStart", function()
+    -- Don't move the frame when the drag started on a config button.
+    if not AutoLock._configDragging then this:StartMoving() end
+  end)
   frame:SetScript("OnDragStop",  function() this:StopMovingOrSizing() end)
 
   frame:SetBackdrop({
@@ -2000,8 +2003,6 @@ function AutoLockRefreshConfigList()
     btn:SetPoint("TOPLEFT", configStrip, "TOPLEFT", x, -2)
     btn:EnableMouse(true)
     btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    -- RegisterForDrag prevents the LeftButton drag from bubbling to the parent
-    -- AutoLockFrame, which would call StartMoving() and move the window.
     btn:RegisterForDrag("LeftButton")
 
     -- isUIShown: this config is currently displayed in the UI (for editing/viewing)
@@ -2067,16 +2068,17 @@ function AutoLockRefreshConfigList()
       AL_TT:Hide()
     end)
 
-    -- OnMouseDown picks up the macro immediately when the button is pressed so
-    -- the user can hold and drag it to an action bar slot in one fluid motion.
-    -- RegisterForDrag above prevents the drag event from bubbling to the parent
-    -- frame (which would call StartMoving()), and OnDragStart absorbs it.
-    btn:SetScript("OnMouseDown", function()
-      if arg1 == "LeftButton" then
-        AutoLockPickupConfigMacro(cfgRef)
-      end
+    -- Real WoW drag-and-drop: hold + move → OnDragStart fires → macro on cursor
+    -- → release over action bar slot → slot fires OnReceiveDrag → macro placed.
+    -- The flag prevents the parent AutoLockFrame's OnDragStart (StartMoving) from
+    -- firing at the same time (which would move the whole window while dragging).
+    btn:SetScript("OnDragStart", function()
+      AutoLock._configDragging = true
+      AutoLockPickupConfigMacro(cfgRef)
     end)
-    btn:SetScript("OnDragStart", function() end)  -- absorb drag; pickup done in OnMouseDown
+    btn:SetScript("OnDragStop", function()
+      AutoLock._configDragging = false
+    end)
 
     btn:SetScript("OnClick", function()
       local shift = IsShiftKeyDown and IsShiftKeyDown()
@@ -2087,8 +2089,7 @@ function AutoLockRefreshConfigList()
         else
           AutoLockOpenEditConfig(cfgRef)
         end
-      else  -- LeftButton: clear any cursor pickup for a plain click
-        if ClearCursor then ClearCursor() end
+      else  -- LeftButton
         if not shift then
           PreviewConfig(cfgRef)
         end
