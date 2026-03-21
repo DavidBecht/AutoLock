@@ -1990,6 +1990,7 @@ function AutoLockRefreshConfigList()
     btn:SetPoint("TOPLEFT", configStrip, "TOPLEFT", x, -2)
     btn:EnableMouse(true)
     btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    btn:RegisterForDrag("LeftButton")
 
     -- isUIShown: this config is currently displayed in the UI (for editing/viewing)
     local isUIShown = (AutoLock._loadedConfigName == cfg.name) or
@@ -2054,14 +2055,10 @@ function AutoLockRefreshConfigList()
       AL_TT:Hide()
     end)
 
-    -- OnMouseDown picks up the macro immediately so the user can drag it to the
-    -- action bar without relying on OnDragStart.  Using RegisterForDrag +
-    -- OnDragStart caused the parent frame's StartMoving() to fire instead (both
-    -- frame and button were registered for LeftButton drag at the same level).
-    btn:SetScript("OnMouseDown", function()
-      if arg1 == "LeftButton" then
-        AutoLockPickupConfigMacro(cfgRef)
-      end
+    -- Drag to action bar: btn intercepts the drag so the parent frame does not
+    -- call StartMoving() instead.
+    btn:SetScript("OnDragStart", function()
+      AutoLockPickupConfigMacro(cfgRef)
     end)
 
     btn:SetScript("OnClick", function()
@@ -2073,8 +2070,7 @@ function AutoLockRefreshConfigList()
         else
           AutoLockOpenEditConfig(cfgRef)
         end
-      else  -- LeftButton: cursor was picked up on MouseDown; clear it for a plain click
-        if ClearCursor then ClearCursor() end
+      else  -- LeftButton
         if not shift then
           PreviewConfig(cfgRef)
         end
