@@ -1941,8 +1941,18 @@ local function AutoLockPickupConfigMacro(cfg)
     return
   end
   local macroName = "AL:" .. string.sub(cfg.name, 1, 12)
-  local iconIndex  = cfg.icon or 1
-  local macroBody  = '/run AutoLock:DoAutoLock("'..cfg.name..'")'
+  -- EditMacro wants the integer icon index; CreateMacro needs the texture name string.
+  local iconIndex = cfg.icon or 1
+  local iconStr   = "INV_Misc_QuestionMark"
+  if cfg.icon and cfg.icon > 0 and GetMacroIconInfo then
+    local tex = GetMacroIconInfo(cfg.icon)
+    if tex and tex ~= "" then
+      -- GetMacroIconInfo returns either "Interface\\Icons\\NAME" or bare "NAME"
+      local _, _, bare = strfind(tex, "([^\\]+)$")
+      iconStr = bare or tex
+    end
+  end
+  local macroBody = '/run AutoLock:DoAutoLock("'..cfg.name..'")'
   local id = GetMacroIndexByName(macroName)
   if id and id > 0 then
     pcall(function() EditMacro(id, macroName, iconIndex, macroBody, 1) end)
@@ -1954,7 +1964,7 @@ local function AutoLockPickupConfigMacro(cfg)
     end
     -- Prefer character macro; fall back to global if character slots are full.
     local perChar = ((charCount or 0) < 18) and 1 or 0
-    id = CreateMacro(macroName, iconIndex, macroBody, perChar)
+    id = CreateMacro(macroName, iconStr, macroBody, perChar)
     if not id then
       AutoLockLog.Error("Could not create macro.")
       return
@@ -1990,6 +2000,8 @@ function AutoLockRefreshConfigList()
     btn:SetPoint("TOPLEFT", configStrip, "TOPLEFT", x, -2)
     btn:EnableMouse(true)
     btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    -- RegisterForDrag prevents the LeftButton drag from bubbling to the parent
+    -- AutoLockFrame, which would call StartMoving() and move the window.
     btn:RegisterForDrag("LeftButton")
 
     -- isUIShown: this config is currently displayed in the UI (for editing/viewing)
@@ -2055,11 +2067,16 @@ function AutoLockRefreshConfigList()
       AL_TT:Hide()
     end)
 
-    -- Drag to action bar: btn intercepts the drag so the parent frame does not
-    -- call StartMoving() instead.
-    btn:SetScript("OnDragStart", function()
-      AutoLockPickupConfigMacro(cfgRef)
+    -- OnMouseDown picks up the macro immediately when the button is pressed so
+    -- the user can hold and drag it to an action bar slot in one fluid motion.
+    -- RegisterForDrag above prevents the drag event from bubbling to the parent
+    -- frame (which would call StartMoving()), and OnDragStart absorbs it.
+    btn:SetScript("OnMouseDown", function()
+      if arg1 == "LeftButton" then
+        AutoLockPickupConfigMacro(cfgRef)
+      end
     end)
+    btn:SetScript("OnDragStart", function() end)  -- absorb drag; pickup done in OnMouseDown
 
     btn:SetScript("OnClick", function()
       local shift = IsShiftKeyDown and IsShiftKeyDown()
@@ -2070,7 +2087,8 @@ function AutoLockRefreshConfigList()
         else
           AutoLockOpenEditConfig(cfgRef)
         end
-      else  -- LeftButton
+      else  -- LeftButton: clear any cursor pickup for a plain click
+        if ClearCursor then ClearCursor() end
         if not shift then
           PreviewConfig(cfgRef)
         end
