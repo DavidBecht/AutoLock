@@ -1984,12 +1984,26 @@ local function AutoLockPickupConfigMacro(cfg)
     AutoLockLog.Warning("Macro API not available.")
     return
   end
-  local macroName = "AL:" .. string.sub(cfg.name, 1, 12)
-  local iconIndex  = cfg.icon or 1
+  local macroName  = "AL:" .. string.sub(cfg.name, 1, 12)
+  local iconIndex  = cfg.icon or 1          -- integer for EditMacro
+  -- CreateMacro in 1.12 needs the bare texture name, not an integer index.
+  -- EditMacro uses the integer (verified working in AutoLockSpellbook).
+  local iconStr = "INV_Misc_QuestionMark"
+  if GetMacroIconInfo then
+    local tex = GetMacroIconInfo(iconIndex)
+    if type(tex) == "string" and tex ~= "" then
+      -- strip "Interface\\Icons\\" prefix when present
+      local _, _, bare = strfind(tex, "([^\\]+)$")
+      iconStr = bare or tex
+    end
+  end
   local macroBody  = '/run AutoLock:DoAutoLock("'..cfg.name..'")'
   local id = GetMacroIndexByName(macroName)
   if id and id > 0 then
-    pcall(function() EditMacro(id, macroName, iconIndex, macroBody, 1) end)
+    -- Try string icon first; fall back to integer if the string form errors.
+    if not pcall(function() EditMacro(id, macroName, iconStr, macroBody, 1) end) then
+      pcall(function() EditMacro(id, macroName, iconIndex, macroBody, 1) end)
+    end
   else
     local globalCount, charCount = GetNumMacros()
     if (globalCount or 0) >= 18 and (charCount or 0) >= 18 then
@@ -1997,7 +2011,7 @@ local function AutoLockPickupConfigMacro(cfg)
       return
     end
     local perChar = ((charCount or 0) < 18) and 1 or 0
-    id = CreateMacro(macroName, iconIndex, macroBody, perChar)
+    id = CreateMacro(macroName, iconStr, macroBody, perChar)
     if not id then
       AutoLockLog.Error("Could not create macro.")
       return
