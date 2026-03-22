@@ -324,7 +324,8 @@ f:SetScript("OnEvent", function()
     end
     DrainSoulChanneling = false
 		DarkHarvestChanneling = false
-		AutoLock._npQueuedThisCast = false  -- Problem 1: cast finished, allow re-evaluation
+		AutoLock._npQueuedThisCast = false
+		AutoLock._npQueuedPriority = 99999
 
   elseif E == "SPELLCAST_FAILED" or E == "SPELLCAST_INTERRUPTED" then
 		DarkHarvestChanneling = false
@@ -332,7 +333,8 @@ f:SetScript("OnEvent", function()
 		WandShooting = false
 		DoLock_OnCooldownUntil = 0
 		ImmolateTargetGUID = nil
-		AutoLock._npQueuedThisCast = false  -- Problem 1: cast failed, allow re-evaluation
+		AutoLock._npQueuedThisCast = false
+		AutoLock._npQueuedPriority = 99999
 
   elseif E == "SPELLCAST_CHANNEL_START" then
     if SpellStartedName == DRAIN_SOUL_NAME then
@@ -352,7 +354,8 @@ f:SetScript("OnEvent", function()
 			DrainSoulChanneling = false
 			DarkHarvestChanneling = false
 			WandShooting = false
-			AutoLock._npQueuedThisCast = false  -- Problem 1: channel finished, allow re-evaluation
+			AutoLock._npQueuedThisCast = false
+		AutoLock._npQueuedPriority = 99999
 
 
   elseif E == "START_AUTOREPEAT_SPELL" then
@@ -710,14 +713,23 @@ local function TryAction(entry)
   -- Skip if not enabled
   if entry.enabled == nil or entry.enabled == false then return false end
 
-  -- Nampower queue guard (per-spell): during an active non-channel cast, skip
-  -- re-queuing the exact spell that is already in the nampower queue.  Any
-  -- spell with a higher priority (different name) still falls through and
-  -- overrides the queue via CastSpellByName — this is how DS gets replaced by
-  -- DH once curses land, and how SB Nightfall can interrupt a DS channel.
-  if AutoLock._npQueuedThisCast and SpellStartedName == entry.name and GetCurrentCastingInfo then
+  -- Nampower queue guard (priority-based): during an active non-channel cast,
+  -- block any spell whose priority is >= the currently queued spell's priority.
+  -- Only a spell with STRICTLY higher priority (lower number) passes through
+  -- and calls CastSpellByName to override the nampower queue slot.
+  --
+  -- Examples:
+  --   Curse (prio 7) queued → DS (prio 23): 23 >= 7 → blocked
+  --   Curse (prio 7) queued → DH (prio 22): 22 >= 7 → blocked
+  --   DS    (prio 23) queued → DH (prio 22): 22 >= 23? NO → DH overrides DS
+  --   Any spell queued → SB Nightfall (prio 1): 1 >= anything → overrides
+  --   DS channeling: casting=nil → guard never fires → SB/DH evaluate freely
+  if AutoLock._npQueuedThisCast and GetCurrentCastingInfo then
     local casting, channeling = GetCurrentCastingInfo()
-    if casting and not channeling then return false end
+    if casting and not channeling then
+      local queuedPrio = AutoLock._npQueuedPriority or 99999
+      if (entry.priority or 99999) >= queuedPrio then return false end
+    end
   end
 
   -- Skip if DarkHarvest is Channeling (unless Nightfall override is active)
@@ -777,6 +789,7 @@ local function TryAction(entry)
   if ok then
     SpellStartedName = entry.name
     AutoLock._npQueuedThisCast = true
+    AutoLock._npQueuedPriority = entry.priority or 99999
   end
   return ok
 end
