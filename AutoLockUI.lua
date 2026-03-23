@@ -628,7 +628,7 @@ local dhDotsPopup = nil
 local function ShowDHDotsPopup(anchor)
   if not dhDotsPopup then
     dhDotsPopup = CreateFrame("Frame", "AutoLockDHDotsPopup", UIParent)
-    dhDotsPopup:SetWidth(220); dhDotsPopup:SetHeight(212)
+    dhDotsPopup:SetWidth(220); dhDotsPopup:SetHeight(236)
     dhDotsPopup:SetFrameStrata("TOOLTIP")
     dhDotsPopup:SetBackdrop({
       bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -716,6 +716,27 @@ local function ShowDHDotsPopup(anchor)
     nightfallCb:SetScript("OnLeave", function() AL_TT:Hide() end)
     dhDotsPopup.nightfallCheck = nightfallCb
 
+    -- DH interrupts DS checkbox
+    local dhInterruptsCb = CreateFrame("CheckButton", nil, dhDotsPopup, "UICheckButtonTemplate")
+    dhInterruptsCb:SetWidth(18); dhInterruptsCb:SetHeight(18)
+    dhInterruptsCb:SetPoint("TOPLEFT", nightfallCb, "BOTTOMLEFT", 0, -6)
+    dhInterruptsCb:SetScript("OnClick", function()
+      local cfg = GetActiveConfig()
+      if not cfg then return end
+      local newVal = not (cfg.darkHarvestInterruptsDS == true)
+      cfg.darkHarvestInterruptsDS = newVal
+      dhInterruptsCb:SetChecked(newVal and 1 or nil)
+    end)
+    local dhInterruptsLbl = dhDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    dhInterruptsLbl:SetPoint("LEFT", dhInterruptsCb, "RIGHT", 4, 0)
+    dhInterruptsLbl:SetText("DH interrupts Drain Soul")
+    dhInterruptsCb:SetScript("OnEnter", function()
+      ShowTooltip(this, "DH interrupts Drain Soul",
+        "When checked, Dark Harvest can\ninterrupt an active Drain Soul channel.\nUncheck to protect Drain Soul from\nbeing cut short by Dark Harvest.")
+    end)
+    dhInterruptsCb:SetScript("OnLeave", function() AL_TT:Hide() end)
+    dhDotsPopup.dhInterruptsCheck = dhInterruptsCb
+
   end
 
   if dhDotsPopup:IsShown() and dhDotsPopup.anchor == anchor then
@@ -734,6 +755,8 @@ local function ShowDHDotsPopup(anchor)
   dhDotsPopup.siphonCheck:SetChecked(dh.siphonLife and 1 or nil)
   dhDotsPopup.shadowVulnCheck:SetChecked(dh.shadowVuln and 1 or nil)
   dhDotsPopup.nightfallCheck:SetChecked(cfg and cfg.darkHarvestAllowNightfall and 1 or nil)
+  dhDotsPopup.dhInterruptsCheck:SetChecked(
+    (cfg == nil or cfg.darkHarvestInterruptsDS ~= false) and 1 or nil)
 
   dhDotsPopup:Show()
 end

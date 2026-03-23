@@ -241,6 +241,20 @@ function AutoLock:_testSetDarkHarvestTiming(castedAt, duration)
   DarkHarvestDuration = duration
 end
 
+-- Returns true if Dark Harvest is allowed to interrupt an active Drain Soul
+-- channel per config setting. Defaults to true (existing behaviour).
+local function isDHInterruptDSEnabled()
+  local combatName = AutoLock._combatConfigName or (AutoLockDB and AutoLockDB.activeConfig)
+  if not combatName or not AutoLockDB or not AutoLockDB.configs then return true end
+  for _, c in ipairs(AutoLockDB.configs) do
+    if c.name == combatName then
+      if c.darkHarvestInterruptsDS == nil then return true end
+      return c.darkHarvestInterruptsDS == true
+    end
+  end
+  return true
+end
+
 -- Returns true if Nightfall (Shadow Trance Shadow Bolt) is allowed to
 -- interrupt a running Dark Harvest channel per config setting.
 local function isDHNightfallAllowed(entry)
@@ -407,11 +421,11 @@ end
 
 local function drainSoulChannelingFinished()
 	if not DrainSoulChanneling then return true end
-	-- Problem 6: Nampower can authoritatively tell us if a channel is still active.
-	-- If nampower says no channel is running, trust it and sync our flag.
+	-- Nampower can authoritatively tell us if a channel is still active.
+	-- isChanneling is the 5th return value of GetCurrentCastingInfo().
 	if GetCurrentCastingInfo then
-		local _, channeling = GetCurrentCastingInfo()
-		if not channeling then
+		local _,_,_,_, isChanneling = GetCurrentCastingInfo()
+		if not isChanneling or isChanneling == 0 then
 			DrainSoulChanneling = false
 			return true
 		end
@@ -422,10 +436,10 @@ end
 
 local function darkHarvestChannelingFinished()
 	if not DarkHarvestChanneling then return true end
-	-- Problem 6: same as above for Dark Harvest.
+	-- isChanneling is the 5th return value of GetCurrentCastingInfo().
 	if GetCurrentCastingInfo then
-		local _, channeling = GetCurrentCastingInfo()
-		if not channeling then
+		local _,_,_,_, isChanneling = GetCurrentCastingInfo()
+		if not isChanneling or isChanneling == 0 then
 			DarkHarvestChanneling = false
 			return true
 		end
@@ -595,16 +609,19 @@ SPELL_PRIORITY = {
 		end,
 	},
 
-	{ name = "Dark Harvest",         
-		type = "cast", 
-		priority = 22,  
-		target = "target", 
-		enabled = false, 
+	{ name = "Dark Harvest",
+		type = "cast",
+		priority = 22,
+		target = "target",
+		enabled = false,
 		condition = function(unit)
 			if IsPlayerMoving() then return false end
 			local onCD, rankStr = AutoLock:IsOnCooldown("Dark Harvest")
 			if onCD then return false end
 			if not darkHarvestDotsReady() then return false end
+			if not drainSoulChannelingFinished() and not isDHInterruptDSEnabled() then
+				return false
+			end
 			return darkHarvestChannelingFinished()
 		end,
 	},
@@ -720,22 +737,18 @@ local function TryAction(entry)
   -- Skip if not enabled
   if entry.enabled == nil or entry.enabled == false then return false end
 
-  -- Nampower queue guard (priority-based): during an active non-channel cast,
-  -- block any spell whose priority is >= the currently queued spell's priority.
-  -- Only a spell with STRICTLY higher priority (lower number) passes through
-  -- and calls CastSpellByName to override the nampower queue slot.
-  --
-  -- Examples:
-  --   Curse (prio 7) queued → DS (prio 23): 23 >= 7 → blocked
-  --   Curse (prio 7) queued → DH (prio 22): 22 >= 7 → blocked
-  --   DS    (prio 23) queued → DH (prio 22): 22 >= 23? NO → DH overrides DS
-  --   Any spell queued → SB Nightfall (prio 1): 1 >= anything → overrides
-  --   DS channeling: casting=nil → guard never fires → SB/DH evaluate freely
-  if AutoLock._npQueuedThisCast and GetCurrentCastingInfo then
-    local casting, channeling = GetCurrentCastingInfo()
-    if casting and not channeling then
+  -- Nampower queue guard: the nampower GCD queue is a single slot that is
+  -- overwritten on every CastSpellByName call (last-write-wins).  To prevent
+  -- a lower-priority spell from replacing a higher-priority spell that is
+  -- already queued, skip any spell whose priority is >= the queued priority.
+  -- Only a spell with STRICTLY higher priority (smaller number) is allowed
+  -- through.  The guard is lifted while a channel is active because channels
+  -- clear _npQueuedThisCast via SPELLCAST_STOP and the channel guards take over.
+  if AutoLock._npQueuedThisCast then
+    local isChanneling = DrainSoulChanneling or DarkHarvestChanneling
+    if not isChanneling then
       local queuedPrio = AutoLock._npQueuedPriority or 99999
-      if (entry.priority or 99999) >= queuedPrio then return false end
+      if (entry.priority or 99999) > queuedPrio then return false end
     end
   end
 
@@ -773,6 +786,13 @@ local function TryAction(entry)
 	
 	local ok = false
   if entry.type == "cast" then
+    -- Interrupt any active channel before casting a higher-priority spell.
+    -- ChannelStopCastingNextTick() signals nampower to cancel the channel on
+    -- its next update; we must call it before CastSpellByName so nampower's
+    -- queue accepts the new spell immediately.
+    if (DrainSoulChanneling or DarkHarvestChanneling) and ChannelStopCastingNextTick then
+      ChannelStopCastingNextTick()
+    end
     CastSpellByName(entry.name, t)
 		if entry.name == "Shadow Bolt" and AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
 			ShadowTrancePending = true
@@ -781,7 +801,19 @@ local function TryAction(entry)
     end
 		ok = true
   elseif entry.type == "curse" then
+    -- Only call ChannelStopCastingNextTick if the curse genuinely needs to be
+    -- cast right now (HasCurse pre-check). This prevents interrupting a
+    -- DS/DH channel for a no-op curse (already up / refreshtime not met).
     if Cursive then
+      if (DrainSoulChanneling or DarkHarvestChanneling) and ChannelStopCastingNextTick then
+        if Cursive.curses then
+          local _, tGuid = UnitExists(t)
+          local rt = entry.refreshtime or 1
+          if not Cursive.curses:HasCurse(string.lower(entry.name), tGuid, rt) then
+            ChannelStopCastingNextTick()
+          end
+        end
+      end
       ok = Cursive:Curse(entry.name, t, { refreshtime = entry.refreshtime or 1 })
     end
 	elseif entry.type == "trinket" then

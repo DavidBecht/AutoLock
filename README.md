@@ -1,6 +1,7 @@
 # AutoLock
 
 > **Priority-based spell rotation addon for Warlocks on [TurtleWoW](https://turtle-wow.org) (Vanilla WoW 1.12)**
+> Version 1.0.4
 
 ![alt text](assets/main_window.png)
 
@@ -42,12 +43,13 @@ Key highlights:
 
 ## Requirements
 
-| Dependency | Required | Purpose |
-|---|---|---|
-| **TurtleWoW** (patch 1.12) | Yes | Client version the addon targets |
-| **Cursive** | Yes | Handles curse application and refresh timers |
-| **SuperWoW** |Yes | Enables buff detection (Shadow Trance, etc.) |
-| **English Client** | Yes | Other languanges not supported yet. |
+| Dependency | Required | Version | Purpose |
+|---|---|---|---|
+| **TurtleWoW** (patch 1.12) | Yes | — | Client version the addon targets |
+| **Cursive** | Yes | ≥ 3.0.0 | Handles curse application and refresh timers |
+| **nampower** | Yes | ≥ 2.0.0 | Spell queueing and channel control (`ChannelStopCastingNextTick`) |
+| **SuperWoW** | Yes | — | Enables buff detection (Shadow Trance, etc.) |
+| **English Client** | Yes | — | Other languages not supported yet. |
 
 ## Installation
 
@@ -198,6 +200,7 @@ Click the **Cfg** button next to *Dark Harvest* to open the DH configuration pop
 | **Curse of Agony / Curse of Shadow** | ✅ | Required dot before DH is cast |
 | **Siphon Life** | ✅ | Required dot before DH is cast |
 | **Allow Nightfall proc during channel** | ❌ | When checked, a Shadow Trance (Nightfall) proc at priority 1 is allowed to fire and interrupt the DH channel |
+| **DH interrupts Drain Soul** | ✅ | When unchecked, Dark Harvest will not interrupt an active Drain Soul channel — useful when you want DS to always run to completion before DH fires |
 
 The popup is draggable.
 
@@ -298,6 +301,7 @@ At login, AutoLock prints a coloured status line for each potential issue:
 | `[Warning] AutoLock uses English spell names. Non-English clients may have issues…` | Your client locale is not `enUS`. Spell detection may fail. |
 | `[Warning] SuperWoW not detected. Buff-based features … will not work.` | SuperWoW is missing — Shadow Trance detection is disabled. |
 | `[Warning] Cursive not found. Curse spells in the rotation will be skipped.` | Cursive addon not loaded — all `curse`-type entries are silently skipped. |
+| `[Warning] Nampower not detected. Spell queueing conflicts possible when spam-casting.` | nampower ≥ 2.0.0 is missing — the GCD guard and channel-interrupt logic will not function correctly. |
 
 Log format: `[AutoLock][Level]: message`
 - `[AutoLock]` — warlock purple
