@@ -240,13 +240,6 @@ function AutoLock:_testSetDarkHarvestTiming(castedAt, duration)
   DarkHarvestCastedAt = castedAt
   DarkHarvestDuration = duration
 end
--- Runs TryAction on each entry; returns the name of the first spell that fires, or nil.
-function AutoLock:_testRunList(list)
-  for _, entry in ipairs(list) do
-    if TryAction(entry) then return entry.name end
-  end
-  return nil
-end
 
 -- Returns true if Nightfall (Shadow Trance Shadow Bolt) is allowed to
 -- interrupt a running Dark Harvest channel per config setting.
@@ -806,6 +799,15 @@ local function TryAction(entry)
     AutoLock._npQueuedPriority = entry.priority or 99999
   end
   return ok
+end
+
+-- Runs TryAction on each entry; returns the name of the first spell that fires, or nil.
+-- Must be defined after TryAction (local function) to capture it as an upvalue.
+function AutoLock:_testRunList(list)
+  for _, entry in ipairs(list) do
+    if TryAction(entry) then return entry.name end
+  end
+  return nil
 end
 
 -- =========================
