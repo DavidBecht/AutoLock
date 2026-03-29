@@ -49,11 +49,20 @@ end
 
 -- Returns: onCooldown:boolean|nil, rankStr:string|nil
 -- false -> ready; true -> on cooldown; nil -> spell not found
+--
+-- GetSpellCooldown returns (start, duration, enable).
+-- During the GCD, start != 0 but duration <= 1.5 s (the GCD window).
+-- A real spell cooldown always has duration > 1.5 s.
+-- Without this distinction, IsOnCooldown returns true during GCD even for
+-- spells with no spell-specific cooldown, blocking Death Coil and Dark Harvest
+-- while Drain Soul (which has no cooldown check) fires instead.
 function AutoLock:IsOnCooldown(spellName)
   local slot, rankStr = GetHighestRankSpell(spellName)
   if not slot then return nil, nil end
-  local cd = GetSpellCooldown(slot, BOOKTYPE_SPELL) -- Vanilla: 0 = ready
-  return (cd ~= 0), rankStr
+  local start, duration = GetSpellCooldown(slot, BOOKTYPE_SPELL)
+  if not start or start == 0 then return false, rankStr end
+  if duration and duration <= 1.5 then return false, rankStr end  -- GCD only, not a real cooldown
+  return true, rankStr
 end
 
 -- Liest die Channel/Cast-Dauer eines Spells per Tooltip
