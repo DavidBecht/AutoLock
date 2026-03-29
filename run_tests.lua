@@ -1060,6 +1060,638 @@ suite("dhInterruptsDSConfig", function()
   if not ok_r then fail("[dhInterruptsDSConfig] crashed", tostring(err)) end
 end)
 
+-- ── dh_after_cos_not_coa ──────────────────────────────────────
+-- BUG: After CoS fires first (prio 6), CoA is blocked by the mutual-exclusion
+-- guard in its condition (HasCurse("curse of shadow") == true → return false).
+-- So the curse sequence is CoS → Corruption → SL; CoA is never applied.
+-- darkHarvestDotsReady() checks HasCurse("curse of agony") which returns false
+-- because DARK_HARVEST_CURSE_NAMES maps "agony" → "curse of agony" only.
+-- CoS satisfies the same debuff slot as CoA, but the check doesn't account for it.
+--
+-- Expected: DH fires on press 4 (CoS+Corruption+SL satisfy the dot requirements).
+-- Actual:   DS fires (DH condition fails → darkHarvestDotsReady() returns false).
+suite("dh_after_cos_not_coa", function()
+  local env = rot_env_new()
+  local ok_r, err = pcall(function()
+    AutoLockDB.configs[1].darkHarvestDots = {
+      agony = true, corruption = true, siphonLife = true,
+    }
+    AutoLock.IsOnCooldown = function() return false end
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+    AutoLock._combatConfigName = "rot_test"
+
+    -- Stateful Cursive: initially no curses on target.
+    -- CoS and CoA share the same curse slot (mutual exclusion).
+    local cursesUp = {}
+    Cursive = {
+      curses = {
+        HasCurse = function(self, name, guid, refresh)
+          return cursesUp[name] == true
+        end,
+      },
+      Curse = function(self, name, tgt, opts)
+        local lower = string.lower(name)
+        if cursesUp[lower] then return false end
+        -- Mutual exclusion: casting CoA while CoS is up is a no-op.
+        if lower == "curse of agony" and cursesUp["curse of shadow"] then return false end
+        -- CoS overwrites CoA on the target.
+        if lower == "curse of shadow" and cursesUp["curse of agony"] then
+          cursesUp["curse of agony"] = nil
+        end
+        cursesUp[lower] = true
+        return true
+      end,
+    }
+
+    -- Collect the relevant entries from the real SPELL_PRIORITY (real conditions).
+    -- DH and DS are normally disabled; enable copies for this test.
+    local entries = {}
+    for _, e in ipairs(SPELL_PRIORITY) do
+      local n = e.name
+      if n == "Curse of Shadow" or n == "Curse of Agony" or
+         n == "Corruption"      or n == "Siphon Life"   or
+         n == "Dark Harvest"    or n == "Drain Soul"    then
+        local copy = {}
+        for k, v in pairs(e) do copy[k] = v end
+        if n == "Dark Harvest" or n == "Drain Soul" then copy.enabled = true end
+        table.insert(entries, copy)
+      end
+    end
+    table.sort(entries, function(a, b)
+      return (a.priority or 99) < (b.priority or 99)
+    end)
+
+    -- Simulate SPELLCAST_STOP clearing the nampower queue between presses.
+    local function after_cast()
+      AutoLock._npQueuedThisCast = false
+      AutoLock._npQueuedPriority = 99999
+    end
+
+    -- Press 1: CoS fires (prio 6 beats CoA's prio 7).
+    eq(AutoLock:_testRunList(entries), "Curse of Shadow",
+      "S1 press 1: CoS fires first")
+    after_cast()
+
+    -- Press 2: CoS is up → CoA condition detects CoS via HasCurse → returns false.
+    --          Rotation falls through to Corruption.
+    eq(AutoLock:_testRunList(entries), "Corruption",
+      "S2 press 2: Corruption fires (CoA blocked by mutual exclusion)")
+    after_cast()
+
+    -- Press 3: CoS+Corruption up → Siphon Life fires.
+    eq(AutoLock:_testRunList(entries), "Siphon Life",
+      "S3 press 3: Siphon Life fires")
+    after_cast()
+
+    -- Press 4: CoS+Corruption+SL are all on the target.
+    -- DH requires agony=true; darkHarvestDotsReady() calls HasCurse("curse of agony").
+    -- "curse of agony" is NOT up — only "curse of shadow" is (CoA was never applied).
+    -- EXPECTED: DH fires (CoS occupies the same debuff slot, satisfying the requirement).
+    -- ACTUAL:   DS fires (darkHarvestDotsReady() returns false → DH condition fails).
+    eq(AutoLock:_testRunList(entries), "Dark Harvest",
+      "S4 press 4: DH fires after CoS+Corruption+SL applied (BUG: DS fires instead)")
+  end)
+  env:restore()
+  if not ok_r then fail("[dh_after_cos_not_coa] crashed", tostring(err)) end
+end)
+
+-- ── gcd_falsely_blocks_dc_and_dh ─────────────────────────────
+-- GetSpellCooldown(slot, bookType) returns (start, duration).
+-- During the GCD, start != 0 but duration <= 1.5 s (just the GCD window).
+-- A real spell cooldown has duration > 1.5 s.
+-- Fix: IsOnCooldown() treats duration <= 1.5 as "GCD only → not on cooldown".
+--
+-- Without the fix: IsOnCooldown returns true during GCD → Death Coil condition
+-- (onCD == false) and Dark Harvest condition (if onCD) both fail → DS fires.
+-- With nampower queuing the macro is always pressed mid-GCD, hitting this bug
+-- on every keypress.  With queuing disabled the macro arrives after the GCD.
+suite("gcd_falsely_blocks_dc_and_dh", function()
+  -- ── Part A: unit-test the IsOnCooldown fix logic ──────────────
+  -- Mirrors the implementation in AutoLockHelper.lua:IsOnCooldown.
+  local function isOnCooldownLogic(start, duration)
+    if not start or start == 0 then return false end
+    if duration and duration <= 1.5 then return false end  -- GCD only
+    return true
+  end
+  is_false(isOnCooldownLogic(0,    0),   "A1 start=0 → ready")
+  is_false(isOnCooldownLogic(nil,  nil), "A2 nil start → ready")
+  is_false(isOnCooldownLogic(1000, 1.5), "A3 GCD (duration=1.5 s) → not a real cooldown")
+  is_false(isOnCooldownLogic(1000, 1.0), "A4 sub-GCD duration → not a real cooldown")
+  is_true (isOnCooldownLogic(1000, 30),  "A5 real CD (30 s) → on cooldown")
+  is_true (isOnCooldownLogic(1000, 2.0), "A6 short real CD (2.0 s) → on cooldown")
+
+  -- ── Part B: rotation — DC and DH fire before DS when IsOnCooldown ──
+  -- correctly returns false during GCD (fixed behaviour).
+  local env = rot_env_new()
+  local ok_r, err = pcall(function()
+    -- Fixed IsOnCooldown: GCD is not reported as a real cooldown.
+    AutoLock.IsOnCooldown = function(_, name) return false end
+
+    AutoLockDB.configs[1].darkHarvestDots = {}
+    AutoLock._combatConfigName = "rot_test"
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+    AutoLock:_testSetDrainSoulChanneling(false)
+    AutoLock:_testSetDarkHarvestChanneling(false)
+
+    local dcEntry, dhEntry, dsEntry
+    for _, e in ipairs(SPELL_PRIORITY) do
+      if e.name == "Death Coil"   and e.type == "cast" then dcEntry = e end
+      if e.name == "Dark Harvest" and e.type == "cast" then dhEntry = e end
+      if e.name == "Drain Soul"   and e.type == "cast" then dsEntry = e end
+    end
+
+    local dc = {}; for k, v in pairs(dcEntry) do dc[k] = v end; dc.enabled = true
+    local dh = {}; for k, v in pairs(dhEntry) do dh[k] = v end; dh.enabled = true
+    local ds = {}; for k, v in pairs(dsEntry) do ds[k] = v end; ds.enabled = true
+
+    eq(AutoLock:_testRunList({dc, ds}), "Death Coil",
+      "B1: DC (prio 20) fires before DS (prio 23) — GCD not reported as cooldown")
+    AutoLock._npQueuedThisCast = false
+    eq(AutoLock:_testRunList({dh, ds}), "Dark Harvest",
+      "B2: DH (prio 22) fires before DS (prio 23) — GCD not reported as cooldown")
+    AutoLock._npQueuedThisCast = false
+    eq(AutoLock:_testRunList({dc, dh, ds}), "Death Coil",
+      "B3: DC (prio 20) fires first among DC + DH + DS")
+  end)
+  env:restore()
+  if not ok_r then fail("[gcd_falsely_blocks_dc_and_dh] crashed", tostring(err)) end
+end)
+
+-- ── cos_coe_cor_overwrite_agony_prematurely ───────────────────
+-- Bug: Curse of Shadow, Curse of the Elements, and Curse of Recklessness
+-- overwrite an active agony-slot curse (CoA / CoS) even when it still has
+-- plenty of time remaining.
+--
+-- Root cause:
+--   CoS condition only checks isBlockedByDrainSoul — it has no guard for
+--   CoA being active on the target.
+--   CoE and CoR have NO condition at all, so they always attempt to cast.
+--
+-- Concrete scenario:
+--   CoA is at higher priority (prio 5) than CoS (prio 7).
+--   CoA fires on press 1 (20 s duration).
+--   On press 2: CoA has 19 s remaining — Cursive returns false (no recast needed).
+--   CoS (prio 7) then runs: its condition passes → Cursive casts CoS because
+--   CoS is absent from the target (0 s remaining < refreshtime=5 s) → CoA replaced!
+--
+-- User quote: "COS zum erneuern von agony zu verwenden ist also nur dann
+-- gültig, wenn agony nicht mehr auf dem gegner ist."
+-- (CoS should only renew the agony slot when agony has COMPLETELY expired.)
+--
+-- Same applies to CoE and CoR (all share the single curse debuff slot).
+--
+-- Fix (not yet applied): add HasCurse("curse of agony"/slot, guid, 0) guard
+-- to CoS, CoE, CoR conditions — block them if the agony slot is still occupied.
+suite("cos_coe_cor_overwrite_agony_prematurely", function()
+  -- Find the relevant entries from SPELL_PRIORITY.
+  local cosEntry, coeEntry, corEntry
+  for _, e in ipairs(SPELL_PRIORITY) do
+    if e.name == "Curse of Shadow"          and e.type == "curse" then cosEntry = e end
+    if e.name == "Curse of the Elements"    and e.type == "curse" then coeEntry = e end
+    if e.name == "Curse of Recklessness"    and e.type == "curse" then corEntry = e end
+  end
+  is_true(cosEntry ~= nil, "Curse of Shadow entry found")
+  is_true(coeEntry ~= nil, "Curse of the Elements entry found")
+  is_true(corEntry ~= nil, "Curse of Recklessness entry found")
+  if not cosEntry or not coeEntry or not corEntry then return end
+
+  local savedCur = Cursive
+  local savedDB  = AutoLockDB
+  local savedCCN = AutoLock._combatConfigName
+  local function restore()
+    Cursive    = savedCur
+    AutoLockDB = savedDB
+    AutoLock._combatConfigName = savedCCN
+    AutoLock:_testSetDrainSoulChanneling(false)
+  end
+
+  local pass, err = pcall(function()
+    AutoLock._combatConfigName = nil
+    AutoLock:_testSetDrainSoulChanneling(false)
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+
+    -- ── Stateful Cursive mock ──────────────────────────────────
+    -- Simulates a single agony-slot debuff on the target.
+    -- agonySlot = "none" | "coa" | "cos" | "coe" | "cor"
+    -- agonyRemaining = seconds left on the active curse
+    local agonySlot      = "coa"  -- CoA was just cast
+    local agonyRemaining = 19.0   -- 19 s remaining after first press
+
+    Cursive = {
+      curses = {
+        HasCurse = function(self, name, guid, refreshtime)
+          local slotMap = {
+            ["curse of agony"]          = "coa",
+            ["curse of shadow"]         = "cos",
+            ["curse of the elements"]   = "coe",
+            ["curse of recklessness"]   = "cor",
+          }
+          local slot = slotMap[name]
+          if slot == nil then return false end
+          if agonySlot ~= slot then return false end  -- different curse in slot
+          return agonyRemaining > refreshtime
+        end,
+      },
+      -- Simulates Cursive's cast: replaces whatever is in the agony slot.
+      -- Returns true if the curse is absent or below its refreshtime threshold.
+      Curse = function(self, name, tgt, opts)
+        local slotMap = {
+          ["Curse of Agony"]          = "coa",
+          ["Curse of Shadow"]         = "cos",
+          ["Curse of the Elements"]   = "coe",
+          ["Curse of Recklessness"]   = "cor",
+        }
+        local slot = slotMap[name]
+        if slot == nil then return false end
+        local rt = (opts and opts.refreshtime) or 0
+        -- If this curse is already in the slot with sufficient time, no recast.
+        if agonySlot == slot and agonyRemaining > rt then return false end
+        -- Otherwise cast (replaces whatever was in the slot).
+        agonySlot      = slot
+        agonyRemaining = 20.0
+        return true
+      end,
+    }
+
+    -- Helper: make an enabled copy of an entry with custom refreshtime.
+    local function copy(e, rt)
+      local c = {}
+      for k, v in pairs(e) do c[k] = v end
+      c.enabled = true
+      if rt ~= nil then c.refreshtime = rt end
+      return c
+    end
+
+    -- Reset the nampower queue between assertions so no guard bleeds through.
+    local function reset_np()
+      AutoLock._npQueuedThisCast = false
+      AutoLock._npQueuedPriority = 99999
+    end
+
+    local cos = copy(cosEntry, 5)  -- user-configured refreshtime=5
+    local coe = copy(coeEntry, 5)
+    local cor = copy(corEntry, 5)
+
+    -- ── E1: CoS fires with CoA active (Malediction: CoS = CoA, cheaper) ────
+    -- isAgonySlotOccupied guard removed; Cursive handles slot arbitration.
+    -- Cursive bug: tracks CoS cast as "curse of shadow" but redirect looks up
+    -- "curse of agony" → immediate recast. Fix pending upstream (pepopo978/Cursive).
+    reset_np(); agonySlot = "coa"; agonyRemaining = 19.0
+    local fired = AutoLock:_testRunList({cos})
+    eq(fired, "Curse of Shadow",
+      "E1 CoA active (19 s): CoS fires (slot guard removed, relies on Cursive)")
+
+    -- ── E2: CoS SHOULD fire when CoA has expired ──────────────
+    reset_np(); agonySlot = "coa"; agonyRemaining = 0.0
+    fired = AutoLock:_testRunList({cos})
+    eq(fired, "Curse of Shadow",
+      "E2 CoA expired: CoS fires correctly to fill the slot")
+
+    -- ── E3: CoE fires with CoA active (Malediction: CoE = CoA, cheaper) ────
+    reset_np(); agonySlot = "coa"; agonyRemaining = 19.0
+    fired = AutoLock:_testRunList({coe})
+    eq(fired, "Curse of the Elements",
+      "E3 CoA active (19 s): CoE fires (slot guard removed, relies on Cursive)")
+
+    -- ── E4: CoE SHOULD fire when CoA has expired ──────────────
+    reset_np(); agonySlot = "coa"; agonyRemaining = 0.0
+    fired = AutoLock:_testRunList({coe})
+    eq(fired, "Curse of the Elements",
+      "E4 CoA expired: CoE fires correctly to fill the slot")
+
+    -- ── E5: CoR fires with CoA active (Malediction: CoR = CoA, cheaper) ────
+    reset_np(); agonySlot = "coa"; agonyRemaining = 19.0
+    fired = AutoLock:_testRunList({cor})
+    eq(fired, "Curse of Recklessness",
+      "E5 CoA active (19 s): CoR fires (slot guard removed, relies on Cursive)")
+
+    -- ── E6: CoR SHOULD fire when CoA has expired ──────────────
+    reset_np(); agonySlot = "coa"; agonyRemaining = 0.0
+    fired = AutoLock:_testRunList({cor})
+    eq(fired, "Curse of Recklessness",
+      "E6 CoA expired: CoR fires correctly to fill the slot")
+
+    -- ── E7: CoS must NOT replace a fresh CoS (own slot, no recast needed) ─
+    -- CoS already in slot with 10 s remaining; refreshtime=5 → 10 > 5 → no recast.
+    reset_np(); agonySlot = "cos"; agonyRemaining = 10.0
+    fired = AutoLock:_testRunList({cos})
+    is_nil(fired,
+      "E7 CoS active (10 s > refreshtime=5): must NOT recast itself")
+
+    -- ── E8: CoS SHOULD recast itself when near expiry ─────────
+    reset_np(); agonySlot = "cos"; agonyRemaining = 3.0   -- 3 s < refreshtime=5 s
+    fired = AutoLock:_testRunList({cos})
+    eq(fired, "Curse of Shadow",
+      "E8 CoS active (3 s < refreshtime=5): recasts itself correctly")
+  end)
+  restore()
+  if not pass then fail("[cos_coe_cor_overwrite_agony_prematurely] crashed", tostring(err)) end
+end)
+
+-- ── agony_refreshtime_combat_snapshot ────────────────────────
+-- Tests the full pipeline: AutoLockDB config → _loadCombatSnapshot →
+-- COMBAT_SPELL_PRIORITY → TryAction → Cursive:Curse(refreshtime=12).
+-- User reported: CoA with refreshtime=12 is only recast after full expiry.
+-- This test verifies whether the snapshot correctly carries refreshtime=12
+-- through to Cursive and that Cursive recasts when < 12 s remaining.
+suite("agony_refreshtime_combat_snapshot", function()
+  local env = rot_env_new()
+  local savedCSP = COMBAT_SPELL_PRIORITY
+  local ok_r, err = pcall(function()
+    AutoLock.IsOnCooldown = function() return false end
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+
+    -- Build a minimal config: only CoA enabled with refreshtime=12.
+    -- All other spells disabled (enabled=false keeps them out of our assertions).
+    local spells = {}
+    for _, e in ipairs(SPELL_PRIORITY) do
+      local key = (e.uitext or e.name or "?") .. "|" .. (e.type or "?")
+      local isCoA = (e.name == "Curse of Agony" and e.type == "curse")
+      spells[key] = {
+        enabled     = isCoA,
+        priority    = e.priority,
+        refreshtime = isCoA and 12 or (e.refreshtime or 0),
+      }
+    end
+    AutoLockDB = {
+      activeConfig = "snap_test",
+      configs = { { name = "snap_test", spells = spells } },
+    }
+    AutoLock:_loadCombatSnapshot("snap_test")
+
+    -- Verify the snapshot picked up refreshtime=12.
+    local coaSnap = nil
+    for _, e in ipairs(COMBAT_SPELL_PRIORITY) do
+      if e.name == "Curse of Agony" and e.type == "curse" then coaSnap = e; break end
+    end
+    is_true(coaSnap ~= nil,              "G0a CoA found in COMBAT_SPELL_PRIORITY")
+    is_true(coaSnap ~= nil and coaSnap.enabled, "G0b CoA is enabled in snapshot")
+    eq(coaSnap and coaSnap.refreshtime, 12, "G0c refreshtime=12 carried through snapshot")
+    eq(type(coaSnap and coaSnap.refreshtime), "number", "G0d refreshtime is a number")
+
+    -- Stateful Cursive: CoA in slot.
+    local agonyRemaining = 0.0
+    Cursive = {
+      curses = {
+        HasCurse = function(self, name, guid, threshold)
+          if name == "curse of agony" then return agonyRemaining > threshold end
+          return false
+        end,
+      },
+      Curse = function(self, name, tgt, opts)
+        if name ~= "Curse of Agony" then return false end
+        local rt = (opts and opts.refreshtime) or 1
+        if agonyRemaining > rt then return false end  -- still up, no recast
+        agonyRemaining = 30.0
+        return true
+      end,
+    }
+
+    local function reset_np()
+      AutoLock._npQueuedThisCast = false
+      AutoLock._npQueuedPriority = 99999
+    end
+
+    -- G1: CoA absent → initial cast
+    agonyRemaining = 0.0; reset_np()
+    eq(AutoLock:_testRunList(COMBAT_SPELL_PRIORITY), "Curse of Agony",
+      "G1 CoA absent: initial cast")
+
+    -- G2: CoA in slot, 15 s remaining (> rt=12) → must NOT recast
+    agonyRemaining = 15.0; reset_np()
+    is_nil(AutoLock:_testRunList(COMBAT_SPELL_PRIORITY),
+      "G2 CoA active (15 s > rt=12): must NOT recast")
+
+    -- G3: CoA in slot, 10 s remaining (< rt=12) → must recast
+    agonyRemaining = 10.0; reset_np()
+    eq(AutoLock:_testRunList(COMBAT_SPELL_PRIORITY), "Curse of Agony",
+      "G3 CoA active (10 s < rt=12): must recast (BUG: does not refresh)")
+  end)
+  COMBAT_SPELL_PRIORITY = savedCSP
+  env:restore()
+  if not ok_r then fail("[agony_refreshtime_combat_snapshot] crashed", tostring(err)) end
+end)
+
+-- ── agony_refreshtime_stale_snapshot ─────────────────────────
+-- Root cause of the reported bug:
+-- SaveCurrentConfigSpells() writes the new refreshtime to AutoLockDB, but
+-- does NOT invalidate _combatConfigName. DoAutoLock(configName) only calls
+-- _loadCombatSnapshot when _combatConfigName ~= configName, so the stale
+-- snapshot (refreshtime=0 → passed as 1 to Cursive) is used forever.
+-- Fix: SaveCurrentConfigSpells must reset AutoLock._combatConfigName = nil.
+suite("agony_refreshtime_stale_snapshot", function()
+  local env = rot_env_new()
+  local savedCSP = COMBAT_SPELL_PRIORITY
+  local ok_r, err = pcall(function()
+    AutoLock.IsOnCooldown = function() return false end
+
+    -- Step 1: build initial snapshot with refreshtime=0 (pre-UI-change state).
+    local spells = {}
+    for _, e in ipairs(SPELL_PRIORITY) do
+      local key = (e.uitext or e.name or "?") .. "|" .. (e.type or "?")
+      spells[key] = { enabled = (e.name == "Curse of Agony" and e.type == "curse"),
+                      priority = e.priority, refreshtime = 0 }
+    end
+    AutoLockDB = {
+      activeConfig = "stale_test",
+      configs = { { name = "stale_test", spells = spells } },
+    }
+    AutoLock:_loadCombatSnapshot("stale_test")
+    -- _combatConfigName is now "stale_test"
+
+    -- Step 2: user changes refreshtime to 12 in UI → SaveCurrentConfigSpells equivalent.
+    -- Writes new value to DB but does NOT reset _combatConfigName.
+    AutoLockDB.configs[1].spells["Curse of Agony|curse"].refreshtime = 12
+    -- (SaveCurrentConfigSpells does NOT call _loadCombatSnapshot or reset _combatConfigName)
+
+    -- Step 3: next DoAutoLock("stale_test") call — _combatConfigName == "stale_test"
+    -- → snapshot NOT rebuilt → CoA entry still has refreshtime=0.
+    local coaSnap = nil
+    for _, e in ipairs(COMBAT_SPELL_PRIORITY) do
+      if e.name == "Curse of Agony" and e.type == "curse" then coaSnap = e; break end
+    end
+    -- BUG: snapshot still carries the old refreshtime=0
+    eq(coaSnap and coaSnap.refreshtime, 0,
+      "H1 stale snapshot: CoA refreshtime still 0 after UI change (bug confirmed)")
+
+    -- Cursive: CoA in slot with 10s remaining
+    local agonyRemaining = 10.0
+    Cursive = {
+      curses = {
+        HasCurse = function(self, name, guid, threshold)
+          if name == "curse of agony" then return agonyRemaining > threshold end
+          return false
+        end,
+      },
+      Curse = function(self, name, tgt, opts)
+        if name ~= "Curse of Agony" then return false end
+        local rt = (opts and opts.refreshtime) or 1
+        if agonyRemaining > rt then return false end
+        agonyRemaining = 30.0
+        return true
+      end,
+    }
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+
+    -- BUG: CoA has 10s but snapshot has rt=0 → Cursive receives {refreshtime=1}
+    -- Cursive: 10 > 1 → does NOT recast → nothing fires.
+    is_nil(AutoLock:_testRunList(COMBAT_SPELL_PRIORITY),
+      "H2 stale snapshot: CoA (10 s) not refreshed because rt is still 0→1 (bug)")
+
+    -- Step 4: fix — resetting _combatConfigName forces snapshot rebuild on next press.
+    AutoLock._combatConfigName = nil
+    AutoLock:_loadCombatSnapshot("stale_test")
+
+    local coaFresh = nil
+    for _, e in ipairs(COMBAT_SPELL_PRIORITY) do
+      if e.name == "Curse of Agony" and e.type == "curse" then coaFresh = e; break end
+    end
+    eq(coaFresh and coaFresh.refreshtime, 12,
+      "H3 after reload: CoA refreshtime=12 in fresh snapshot")
+
+    agonyRemaining = 10.0
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+    eq(AutoLock:_testRunList(COMBAT_SPELL_PRIORITY), "Curse of Agony",
+      "H4 after reload: CoA (10 s < rt=12) correctly refreshes")
+  end)
+  COMBAT_SPELL_PRIORITY = savedCSP
+  env:restore()
+  if not ok_r then fail("[agony_refreshtime_stale_snapshot] crashed", tostring(err)) end
+end)
+
+-- ── agony_refreshtime_with_cos_enabled ───────────────────────
+-- Scenario reported by user: CoA refreshtime=12 and CoS refreshtime=12 both
+-- enabled. CoA is in the slot with 10 s remaining (< refreshtime). Expected:
+-- the rotation recasts CoA on the next keypress. Actual (reported): CoA is
+-- only recast after it fully expires.
+--
+-- Root cause under investigation:
+--   isAgonySlotOccupied("curse of shadow") uses HasCurse(tGuid, 0) →
+--   CoA (10 s > 0) blocks CoS correctly. Then CoA condition passes and
+--   Cursive is called with refreshtime=12. Cursive: 10 < 12 → should recast.
+--   If this test fails, the blocking guard is interfering with CoA's self-refresh.
+suite("agony_refreshtime_with_cos_enabled", function()
+  local cosEntry, coaEntry
+  for _, e in ipairs(SPELL_PRIORITY) do
+    if e.name == "Curse of Shadow" and e.type == "curse" then cosEntry = e end
+    if e.name == "Curse of Agony"  and e.type == "curse" then coaEntry = e end
+  end
+  is_true(cosEntry ~= nil, "CoS entry found")
+  is_true(coaEntry ~= nil, "CoA entry found")
+  if not cosEntry or not coaEntry then return end
+
+  local savedCur = Cursive
+  local savedDB  = AutoLockDB
+  local savedCCN = AutoLock._combatConfigName
+  local function restore()
+    Cursive    = savedCur
+    AutoLockDB = savedDB
+    AutoLock._combatConfigName = savedCCN
+    AutoLock:_testSetDrainSoulChanneling(false)
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+  end
+
+  local pass, err = pcall(function()
+    AutoLock._combatConfigName = nil
+    AutoLock:_testSetDrainSoulChanneling(false)
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+
+    -- Stateful Cursive: one agony-slot curse at a time with a remaining timer.
+    local agonySlot      = "none"  -- "none" | "coa" | "cos"
+    local agonyRemaining = 0.0
+
+    Cursive = {
+      curses = {
+        HasCurse = function(self, name, guid, refreshtime)
+          local slotMap = {
+            ["curse of agony"]  = "coa",
+            ["curse of shadow"] = "cos",
+            ["curse of the elements"]  = "coe",
+            ["curse of recklessness"]  = "cor",
+          }
+          local slot = slotMap[name]
+          if slot == nil then return false end
+          if agonySlot ~= slot then return false end
+          return agonyRemaining > refreshtime
+        end,
+      },
+      Curse = function(self, name, tgt, opts)
+        local slotMap = {
+          ["Curse of Agony"]  = "coa",
+          ["Curse of Shadow"] = "cos",
+        }
+        local slot = slotMap[name]
+        if slot == nil then return false end
+        local rt = (opts and opts.refreshtime) or 1
+        -- If this curse is already in the slot with sufficient time, no recast.
+        if agonySlot == slot and agonyRemaining > rt then return false end
+        -- Otherwise cast (replaces whatever was in the slot).
+        agonySlot      = slot
+        agonyRemaining = 30.0
+        return true
+      end,
+    }
+
+    local function cos(rt) local c = {}; for k,v in pairs(cosEntry) do c[k]=v end; c.enabled=true; c.refreshtime=rt; return c end
+    local function coa(rt) local c = {}; for k,v in pairs(coaEntry) do c[k]=v end; c.enabled=true; c.refreshtime=rt; return c end
+    local function reset_np() AutoLock._npQueuedThisCast=false; AutoLock._npQueuedPriority=99999 end
+
+    -- ── F1: CoA alone (no CoS), 10 s remaining, refreshtime=12 ──
+    -- CoA should fire and refresh (10 < 12).
+    agonySlot = "coa"; agonyRemaining = 10.0
+    reset_np()
+    eq(AutoLock:_testRunList({coa(12)}), "Curse of Agony",
+      "F1 CoA alone, 10 s remaining, rt=12: should refresh")
+
+    -- ── F2: CoA alone, 15 s remaining, refreshtime=12 ────────────
+    -- CoA should NOT fire (15 > 12, Cursive skips it).
+    agonySlot = "coa"; agonyRemaining = 15.0
+    reset_np()
+    is_nil(AutoLock:_testRunList({coa(12)}),
+      "F2 CoA alone, 15 s remaining, rt=12: must NOT fire")
+
+    -- ── F3: CoS (prio 6) + CoA (prio 7), CoA in slot 10 s, both rt=12 ──
+    -- isAgonySlotOccupied guard removed → CoS fires first (prio 6 < 7).
+    -- Cursive bug: will recast CoS every tick (pending upstream fix).
+    agonySlot = "coa"; agonyRemaining = 10.0
+    reset_np()
+    eq(AutoLock:_testRunList({cos(12), coa(12)}), "Curse of Shadow",
+      "F3 CoS+CoA, CoA in slot (10 s, rt=12): CoS fires first (guard removed)")
+
+    -- ── F4: CoS + CoA, CoA in slot 15 s, both rt=12 ────────────
+    -- CoS fires (no guard). Cursive sees CoS absent → casts CoS.
+    agonySlot = "coa"; agonyRemaining = 15.0
+    reset_np()
+    eq(AutoLock:_testRunList({cos(12), coa(12)}), "Curse of Shadow",
+      "F4 CoS+CoA, CoA in slot (15 s, rt=12): CoS fires (guard removed)")
+
+    -- ── F5: CoS + CoA, CoS in slot 10 s (< refreshtime) ────────
+    -- CoS not blocked (CoA absent). CoS: Cursive recasts (10 < 12).
+    -- CoA: mutex (HasCurse CoS, 0) → blocked.
+    -- Expected: CoS fires.
+    agonySlot = "cos"; agonyRemaining = 10.0
+    reset_np()
+    eq(AutoLock:_testRunList({cos(12), coa(12)}), "Curse of Shadow",
+      "F5 CoS+CoA, CoS in slot (10 s, rt=12): CoS refreshes itself")
+
+    -- ── F6: CoS + CoA, slot empty → CoS fires first (higher prio) ─
+    agonySlot = "none"; agonyRemaining = 0.0
+    reset_np()
+    eq(AutoLock:_testRunList({cos(12), coa(12)}), "Curse of Shadow",
+      "F6 empty slot: CoS fires first (prio 6 < prio 7)")
+  end)
+  restore()
+  if not pass then fail("[agony_refreshtime_with_cos_enabled] crashed", tostring(err)) end
+end)
+
 -- ============================================================
 -- 6. Runner
 -- ============================================================

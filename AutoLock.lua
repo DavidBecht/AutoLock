@@ -196,6 +196,11 @@ local DARK_HARVEST_CURSE_NAMES = {
   corruption = "corruption",
   siphonLife = "siphon life",
 }
+-- Curse-slot alternatives: CoS and CoA are mutually exclusive (share one debuff slot).
+-- If the primary curse is absent but the alternative is active, the requirement is met.
+local DARK_HARVEST_CURSE_ALTERNATIVES = {
+  agony = "curse of shadow",
+}
 -- Non-Cursive debuffs (use UnitDebuff + SpellInfo via SuperWoW)
 local DARK_HARVEST_DEBUFF_NAMES = {
   shadowVuln = "Shadow Vulnerability",
@@ -221,6 +226,7 @@ local function isBlockedByDrainSoul(key)
   end
   return true
 end
+
 
 -- Test hooks: allow unit tests to control internal state without WoW events.
 function AutoLock:_testSetDrainSoulChanneling(v)
@@ -286,9 +292,12 @@ local function darkHarvestDotsReady()
 
   for key, curseName in pairs(DARK_HARVEST_CURSE_NAMES) do
     if req[key] then
-      if not Cursive or not Cursive.curses:HasCurse(curseName, targetGuid, 0) then
-        return false
+      local satisfied = Cursive and Cursive.curses:HasCurse(curseName, targetGuid, 0)
+      if not satisfied then
+        local alt = DARK_HARVEST_CURSE_ALTERNATIVES[key]
+        satisfied = alt and Cursive and Cursive.curses:HasCurse(alt, targetGuid, 0)
       end
+      if not satisfied then return false end
     end
   end
 
@@ -506,7 +515,10 @@ SPELL_PRIORITY = {
 
   
 	{ name = "Curse of Shadow", type = "curse", priority = 6, refreshtime = 0, target = "target", enabled = true,
-    condition = function(unit) return not isBlockedByDrainSoul("agony") end },
+    condition = function(unit)
+      if isBlockedByDrainSoul("agony") then return false end
+      return true
+    end },
   { name = "Curse of Agony",  type = "curse", priority = 7, refreshtime = 0, target = "target", enabled = true,
     condition = function(unit)
       if isBlockedByDrainSoul("agony") then return false end

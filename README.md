@@ -37,7 +37,7 @@ Key highlights:
 - **Priority-based** — every spell has a number; lowest number fires first.
 - **Fully configurable** — enable/disable spells, reorder them, and save multiple named configs (e.g. *AoE*, *Single Target*, *PvP*).
 - **Smart conditions** — spells only fire when their condition is met: Shadow Trance proc active, cooldown ready, target in range, player not moving, HP/mana above a threshold, etc.
-- **Curse integration** — curses are managed via the [Cursive](https://github.com/) addon and are automatically refreshed only when they fall off.
+- **Curse integration** — curses are managed via the [Cursive](https://github.com/pepopo978/Cursive) addon and are automatically refreshed only when they fall off.
 - **Soul Shard management** — optionally auto-deletes shards sitting outside your Soul Bag when your Soul Bag is full.
 - **Life Tap automation** — optionally casts Life Tap when you run low on mana before a cast.
 
@@ -96,7 +96,7 @@ The active config is highlighted in gold. Hovering shows a tooltip with all inte
 
 Each row in the list represents one spell entry.
 
-<!-- IMAGE: Close-up of 3–4 spell rows, showing the checkbox, spell name, priority number, optional refresh box, Cond button, and Up/Down buttons. -->
+![Spell Priority List](assets/add_new_spell.png)
 
 | Column | Description |
 |---|---|
@@ -178,6 +178,8 @@ The table below lists every spell entry that ships with AutoLock, sorted by defa
 
 ## Drain Soul Config (DS Cfg)
 
+![DS Config Window](assets/ds_config_window.png)
+
 Click the **Cfg** button next to *Drain Soul* in the spell list to open the DS configuration popup.
 
 This lets you choose which dots AutoLock is allowed to renew **while Drain Soul is actively channeling**. Renewing a curse mid-channel interrupts the channel — uncheck a dot to keep the channel running uninterrupted.
@@ -191,6 +193,8 @@ This lets you choose which dots AutoLock is allowed to renew **while Drain Soul 
 The popup is draggable.
 
 ## Dark Harvest Config (DH Cfg)
+
+![DH Config Window](assets/dh_config_window.png)
 
 Click the **Cfg** button next to *Dark Harvest* to open the DH configuration popup.
 
@@ -208,9 +212,9 @@ The popup is draggable.
 
 Configs let you save and switch between different priority setups instantly.
 
-<!-- IMAGE: Screenshot showing the "New Config" popup with the name field and icon picker grid. -->
-
 ### Creating a Config
+
+![New Config popup](assets/add_new_config.png)
 
 1. Click **New Config** at the bottom of the main window.
 2. Type a name (up to 16 characters).
@@ -225,7 +229,7 @@ Left-click any config icon in the strip at the top. The icon turns gold to indic
 
 Shift-drag a config icon onto an action bar slot to create a macro. The macro runs:
 ```
-/run AutoLock:LoadConfigByName("YourConfigName"); AutoLock:DoAutoLock()
+/run AutoLock:DoAutoLock("YourConfigName")
 ```
 This lets you switch configs and fire the rotation in one keypress.
 
@@ -290,7 +294,7 @@ Spells marked as cast-type check the movement poller (`MovementEvents`). If the 
 
 ### Range Checking
 
-For cast and curse spells, AutoLock searches your action bars for a slot containing that spell and calls `IsActionInRange()`. If the slot is not found, range checking is skipped with a warning. **Keep your rotation spells on your action bars.**
+For cast and curse spells, AutoLock checks range via nampower's `IsSpellInRange(name, "target")` when available. If nampower is not loaded, it falls back to scanning action bar slots and calling `IsActionInRange()` — in that case, **keep your rotation spells on your action bars**.
 
 ## Dependencies & Startup Warnings
 
@@ -301,7 +305,7 @@ At login, AutoLock prints a coloured status line for each potential issue:
 | `[Warning] AutoLock uses English spell names. Non-English clients may have issues…` | Your client locale is not `enUS`. Spell detection may fail. |
 | `[Warning] SuperWoW not detected. Buff-based features … will not work.` | SuperWoW is missing — Shadow Trance detection is disabled. |
 | `[Warning] Cursive not found. Curse spells in the rotation will be skipped.` | Cursive addon not loaded — all `curse`-type entries are silently skipped. |
-| `[Warning] Nampower not detected. Spell queueing conflicts possible when spam-casting.` | nampower ≥ 2.0.0 is missing — the GCD guard and channel-interrupt logic will not function correctly. |
+| `[Warning] Nampower not detected. Spell queueing conflicts possible when spam-casting.` | nampower ≥ 2.0.0 is missing — channel interrupts are slightly delayed (server round-trip instead of frame-accurate) and range/mana/duration checks fall back to tooltip scanning. |
 
 Log format: `[AutoLock][Level]: message`
 - `[AutoLock]` — warlock purple
