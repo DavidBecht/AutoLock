@@ -628,7 +628,7 @@ local dhDotsPopup = nil
 local function ShowDHDotsPopup(anchor)
   if not dhDotsPopup then
     dhDotsPopup = CreateFrame("Frame", "AutoLockDHDotsPopup", UIParent)
-    dhDotsPopup:SetWidth(220); dhDotsPopup:SetHeight(212)
+    dhDotsPopup:SetWidth(220); dhDotsPopup:SetHeight(236)
     dhDotsPopup:SetFrameStrata("TOOLTIP")
     dhDotsPopup:SetBackdrop({
       bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -716,6 +716,27 @@ local function ShowDHDotsPopup(anchor)
     nightfallCb:SetScript("OnLeave", function() AL_TT:Hide() end)
     dhDotsPopup.nightfallCheck = nightfallCb
 
+    -- DH interrupts DS checkbox
+    local dhInterruptsCb = CreateFrame("CheckButton", nil, dhDotsPopup, "UICheckButtonTemplate")
+    dhInterruptsCb:SetWidth(18); dhInterruptsCb:SetHeight(18)
+    dhInterruptsCb:SetPoint("TOPLEFT", nightfallCb, "BOTTOMLEFT", 0, -6)
+    dhInterruptsCb:SetScript("OnClick", function()
+      local cfg = GetActiveConfig()
+      if not cfg then return end
+      local newVal = not (cfg.darkHarvestInterruptsDS == true)
+      cfg.darkHarvestInterruptsDS = newVal
+      dhInterruptsCb:SetChecked(newVal and 1 or nil)
+    end)
+    local dhInterruptsLbl = dhDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    dhInterruptsLbl:SetPoint("LEFT", dhInterruptsCb, "RIGHT", 4, 0)
+    dhInterruptsLbl:SetText("DH interrupts Drain Soul")
+    dhInterruptsCb:SetScript("OnEnter", function()
+      ShowTooltip(this, "DH interrupts Drain Soul",
+        "When checked, Dark Harvest can\ninterrupt an active Drain Soul channel.\nUncheck to protect Drain Soul from\nbeing cut short by Dark Harvest.")
+    end)
+    dhInterruptsCb:SetScript("OnLeave", function() AL_TT:Hide() end)
+    dhDotsPopup.dhInterruptsCheck = dhInterruptsCb
+
   end
 
   if dhDotsPopup:IsShown() and dhDotsPopup.anchor == anchor then
@@ -734,6 +755,8 @@ local function ShowDHDotsPopup(anchor)
   dhDotsPopup.siphonCheck:SetChecked(dh.siphonLife and 1 or nil)
   dhDotsPopup.shadowVulnCheck:SetChecked(dh.shadowVuln and 1 or nil)
   dhDotsPopup.nightfallCheck:SetChecked(cfg and cfg.darkHarvestAllowNightfall and 1 or nil)
+  dhDotsPopup.dhInterruptsCheck:SetChecked(
+    (cfg == nil or cfg.darkHarvestInterruptsDS ~= false) and 1 or nil)
 
   dhDotsPopup:Show()
 end
@@ -1105,7 +1128,10 @@ function AutoLock:CreateUI()
   frame:SetMovable(true)
   frame:EnableMouse(true)
   frame:RegisterForDrag("LeftButton")
-  frame:SetScript("OnDragStart", function() this:StartMoving() end)
+  frame:SetScript("OnDragStart", function()
+    -- Don't move the frame when the drag started on a config button.
+    if not AutoLock._configDragging then this:StartMoving() end
+  end)
   frame:SetScript("OnDragStop",  function() this:StopMovingOrSizing() end)
 
   frame:SetBackdrop({
@@ -1933,6 +1959,47 @@ function AutoLockNewConfigPopupButton_OnClick()
 end
 
 -- =========================
+-- Drag-visual: floating icon frame that follows the cursor so the user
+-- clearly sees what is being dragged (WoW 1.12 only changes the cursor
+-- icon subtly; a floating frame is far more visible).
+-- =========================
+local _dragFrame, _dragTex, _draggingActive = nil, nil, false
+
+local function AL_CreateDragFrame()
+  if _dragFrame then return end
+  _dragFrame = CreateFrame("Frame", "AutoLockDragFrame", UIParent)
+  _dragFrame:SetWidth(36); _dragFrame:SetHeight(36)
+  _dragFrame:SetFrameStrata("TOOLTIP")
+  _dragFrame:EnableMouse(false)
+  _dragTex = _dragFrame:CreateTexture(nil, "ARTWORK")
+  _dragTex:SetAllPoints(_dragFrame)
+  _dragFrame:SetScript("OnUpdate", function()
+    if not _draggingActive then return end
+    local cx, cy = GetCursorPosition()
+    local s = UIParent:GetScale()
+    _dragFrame:ClearAllPoints()
+    _dragFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", cx / s, cy / s)
+  end)
+  _dragFrame:Hide()
+end
+
+local function AL_ShowDragIcon(tex)
+  AL_CreateDragFrame()
+  _dragTex:SetTexture(tex)
+  _draggingActive = true
+  local cx, cy = GetCursorPosition()
+  local s = UIParent:GetScale()
+  _dragFrame:ClearAllPoints()
+  _dragFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", cx / s, cy / s)
+  _dragFrame:Show()
+end
+
+local function AL_HideDragIcon()
+  _draggingActive = false
+  if _dragFrame then _dragFrame:Hide() end
+end
+
+-- =========================
 -- Config macro pickup helper
 -- =========================
 local function AutoLockPickupConfigMacro(cfg)
@@ -1940,19 +2007,34 @@ local function AutoLockPickupConfigMacro(cfg)
     AutoLockLog.Warning("Macro API not available.")
     return
   end
-  local macroName = "AL:" .. string.sub(cfg.name, 1, 12)
-  local iconIndex  = cfg.icon or 1
+  local macroName  = "AL:" .. string.sub(cfg.name, 1, 12)
+  local iconIndex  = cfg.icon or 1          -- integer for EditMacro
+  -- CreateMacro in 1.12 needs the bare texture name, not an integer index.
+  -- EditMacro uses the integer (verified working in AutoLockSpellbook).
+  local iconStr = "INV_Misc_QuestionMark"
+  if GetMacroIconInfo then
+    local tex = GetMacroIconInfo(iconIndex)
+    if type(tex) == "string" and tex ~= "" then
+      -- strip "Interface\\Icons\\" prefix when present
+      local _, _, bare = strfind(tex, "([^\\]+)$")
+      iconStr = bare or tex
+    end
+  end
   local macroBody  = '/run AutoLock:DoAutoLock("'..cfg.name..'")'
   local id = GetMacroIndexByName(macroName)
   if id and id > 0 then
-    pcall(function() EditMacro(id, macroName, iconIndex, macroBody, 1) end)
+    -- Try string icon first; fall back to integer if the string form errors.
+    if not pcall(function() EditMacro(id, macroName, iconStr, macroBody, 1) end) then
+      pcall(function() EditMacro(id, macroName, iconIndex, macroBody, 1) end)
+    end
   else
     local globalCount, charCount = GetNumMacros()
     if (globalCount or 0) >= 18 and (charCount or 0) >= 18 then
       AutoLockLog.Warning("No free macro slots.")
       return
     end
-    id = CreateMacro(macroName, iconIndex, macroBody, 1)
+    local perChar = ((charCount or 0) < 18) and 1 or 0
+    id = CreateMacro(macroName, iconStr, macroBody, perChar)
     if not id then
       AutoLockLog.Error("Could not create macro.")
       return
@@ -2053,8 +2135,19 @@ function AutoLockRefreshConfigList()
       AL_TT:Hide()
     end)
 
+    -- Real WoW drag-and-drop: hold + move → OnDragStart → macro picked up
+    -- → release over action bar slot → OnReceiveDrag → macro placed.
+    -- Flag prevents parent AutoLockFrame's OnDragStart (StartMoving) firing.
+    -- Floating drag frame gives visible feedback (cursor icon alone is subtle).
+    local cfgIconTex = iconResult  -- captured per-button for the drag visual
     btn:SetScript("OnDragStart", function()
+      AutoLock._configDragging = true
       AutoLockPickupConfigMacro(cfgRef)
+      AL_ShowDragIcon(cfgIconTex)
+    end)
+    btn:SetScript("OnDragStop", function()
+      AutoLock._configDragging = false
+      AL_HideDragIcon()
     end)
 
     btn:SetScript("OnClick", function()

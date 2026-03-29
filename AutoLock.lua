@@ -120,6 +120,10 @@ function AutoLock:OnEnable()
     AutoLockLog.Warning("Cursive not found. Curse spells in the rotation will be skipped.")
   end
 
+  if not GetCurrentCastingInfo then
+    AutoLockLog.Warning("Nampower not detected. Spell queueing conflicts possible when spam-casting.")
+  end
+
 	self:InitUI()
 	self:BuildKnownSpellSet()
 end
@@ -192,6 +196,11 @@ local DARK_HARVEST_CURSE_NAMES = {
   corruption = "corruption",
   siphonLife = "siphon life",
 }
+-- Curse-slot alternatives: CoS and CoA are mutually exclusive (share one debuff slot).
+-- If the primary curse is absent but the alternative is active, the requirement is met.
+local DARK_HARVEST_CURSE_ALTERNATIVES = {
+  agony = "curse of shadow",
+}
 -- Non-Cursive debuffs (use UnitDebuff + SpellInfo via SuperWoW)
 local DARK_HARVEST_DEBUFF_NAMES = {
   shadowVuln = "Shadow Vulnerability",
@@ -218,6 +227,7 @@ local function isBlockedByDrainSoul(key)
   return true
 end
 
+
 -- Test hooks: allow unit tests to control internal state without WoW events.
 function AutoLock:_testSetDrainSoulChanneling(v)
   DrainSoulChanneling = v
@@ -228,6 +238,27 @@ end
 function AutoLock:_testSetDrainSoulTiming(castedAt, duration)
   DrainSoulCastedAt  = castedAt
   DrainSoulDuration  = duration
+end
+function AutoLock:_testSetDarkHarvestChanneling(v)
+  DarkHarvestChanneling = v
+end
+function AutoLock:_testSetDarkHarvestTiming(castedAt, duration)
+  DarkHarvestCastedAt = castedAt
+  DarkHarvestDuration = duration
+end
+
+-- Returns true if Dark Harvest is allowed to interrupt an active Drain Soul
+-- channel per config setting. Defaults to true (existing behaviour).
+local function isDHInterruptDSEnabled()
+  local combatName = AutoLock._combatConfigName or (AutoLockDB and AutoLockDB.activeConfig)
+  if not combatName or not AutoLockDB or not AutoLockDB.configs then return true end
+  for _, c in ipairs(AutoLockDB.configs) do
+    if c.name == combatName then
+      if c.darkHarvestInterruptsDS == nil then return true end
+      return c.darkHarvestInterruptsDS == true
+    end
+  end
+  return true
 end
 
 -- Returns true if Nightfall (Shadow Trance Shadow Bolt) is allowed to
@@ -261,9 +292,12 @@ local function darkHarvestDotsReady()
 
   for key, curseName in pairs(DARK_HARVEST_CURSE_NAMES) do
     if req[key] then
-      if not Cursive or not Cursive.curses:HasCurse(curseName, targetGuid, 0) then
-        return false
+      local satisfied = Cursive and Cursive.curses:HasCurse(curseName, targetGuid, 0)
+      if not satisfied then
+        local alt = DARK_HARVEST_CURSE_ALTERNATIVES[key]
+        satisfied = alt and Cursive and Cursive.curses:HasCurse(alt, targetGuid, 0)
       end
+      if not satisfied then return false end
     end
   end
 
@@ -320,6 +354,8 @@ f:SetScript("OnEvent", function()
     end
     DrainSoulChanneling = false
 		DarkHarvestChanneling = false
+		AutoLock._npQueuedThisCast = false
+		AutoLock._npQueuedPriority = 99999
 
   elseif E == "SPELLCAST_FAILED" or E == "SPELLCAST_INTERRUPTED" then
 		DarkHarvestChanneling = false
@@ -327,6 +363,8 @@ f:SetScript("OnEvent", function()
 		WandShooting = false
 		DoLock_OnCooldownUntil = 0
 		ImmolateTargetGUID = nil
+		AutoLock._npQueuedThisCast = false
+		AutoLock._npQueuedPriority = 99999
 
   elseif E == "SPELLCAST_CHANNEL_START" then
     if SpellStartedName == DRAIN_SOUL_NAME then
@@ -346,6 +384,8 @@ f:SetScript("OnEvent", function()
 			DrainSoulChanneling = false
 			DarkHarvestChanneling = false
 			WandShooting = false
+			AutoLock._npQueuedThisCast = false
+		AutoLock._npQueuedPriority = 99999
 
 
   elseif E == "START_AUTOREPEAT_SPELL" then
@@ -369,6 +409,15 @@ end)
 -- =========================
 -- Give each spell a "priority" number. Lower = higher priority.
 -- You can change just the numbers instead of reordering the table.
+
+-- Problem 3: Movement detection — prefer Nampower's direct C-side query over
+-- the 100ms map-position polling in Movement.lua when available.
+local function IsPlayerMoving()
+  if PlayerIsMoving then return PlayerIsMoving() == 1 end
+  if MovementEvents then return MovementEvents:IsMoving() end
+  return false
+end
+
 local function IsShadowTranceProc()
     local hasBuff = AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight")
 		if hasBuff then
@@ -380,21 +429,32 @@ local function IsShadowTranceProc()
 end
 
 local function drainSoulChannelingFinished()
-	if DrainSoulChanneling then
-		local remain = (DrainSoulCastedAt + DrainSoulDuration) - GetTime()
-		-- print("Remain:", remain, "Channel:", DrainSoulChanneling)
-		return (remain <= 0.04) 
+	if not DrainSoulChanneling then return true end
+	-- Nampower can authoritatively tell us if a channel is still active.
+	-- isChanneling is the 5th return value of GetCurrentCastingInfo().
+	if GetCurrentCastingInfo then
+		local _,_,_,_, isChanneling = GetCurrentCastingInfo()
+		if not isChanneling or isChanneling == 0 then
+			DrainSoulChanneling = false
+			return true
+		end
 	end
-	return true
+	local remain = (DrainSoulCastedAt + DrainSoulDuration) - GetTime()
+	return (remain <= 0.04)
 end
 
 local function darkHarvestChannelingFinished()
-	if DarkHarvestChanneling then
-		local remain = (DarkHarvestCastedAt + DarkHarvestDuration) - GetTime()
-		-- print("Remain:", remain, "Channel:", DrainSoulChanneling)
-		return (remain <= 0.04) 
+	if not DarkHarvestChanneling then return true end
+	-- isChanneling is the 5th return value of GetCurrentCastingInfo().
+	if GetCurrentCastingInfo then
+		local _,_,_,_, isChanneling = GetCurrentCastingInfo()
+		if not isChanneling or isChanneling == 0 then
+			DarkHarvestChanneling = false
+			return true
+		end
 	end
-	return true
+	local remain = (DarkHarvestCastedAt + DarkHarvestDuration) - GetTime()
+	return (remain <= 0.04)
 end
 
 SPELL_PRIORITY = {
@@ -455,7 +515,10 @@ SPELL_PRIORITY = {
 
   
 	{ name = "Curse of Shadow", type = "curse", priority = 6, refreshtime = 0, target = "target", enabled = true,
-    condition = function(unit) return not isBlockedByDrainSoul("agony") end },
+    condition = function(unit)
+      if isBlockedByDrainSoul("agony") then return false end
+      return true
+    end },
   { name = "Curse of Agony",  type = "curse", priority = 7, refreshtime = 0, target = "target", enabled = true,
     condition = function(unit)
       if isBlockedByDrainSoul("agony") then return false end
@@ -493,7 +556,7 @@ SPELL_PRIORITY = {
 		target = "target", 
 		enabled = false,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			local onCD, rankStr = AutoLock:IsOnCooldown("Soul Fire")
 			if onCD then return false end
 			return true
@@ -512,7 +575,7 @@ SPELL_PRIORITY = {
 			if DoLock_OnCooldownUntil > 0 and _targetGUID == ImmolateTargetGUID then
 				if GetTime() < DoLock_OnCooldownUntil then return false end
 			end
-      if MovementEvents and MovementEvents:IsMoving() then return false end
+      if IsPlayerMoving() then return false end
       return true
     end,
     
@@ -525,7 +588,7 @@ SPELL_PRIORITY = {
 		target = "target", 
 		enabled = false,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			local onCD, rankStr = AutoLock:IsOnCooldown("Conflagrate")
 			if onCD then return false end
 			return true
@@ -558,16 +621,19 @@ SPELL_PRIORITY = {
 		end,
 	},
 
-	{ name = "Dark Harvest",         
-		type = "cast", 
-		priority = 22,  
-		target = "target", 
-		enabled = false, 
+	{ name = "Dark Harvest",
+		type = "cast",
+		priority = 22,
+		target = "target",
+		enabled = false,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			local onCD, rankStr = AutoLock:IsOnCooldown("Dark Harvest")
 			if onCD then return false end
 			if not darkHarvestDotsReady() then return false end
+			if not drainSoulChannelingFinished() and not isDHInterruptDSEnabled() then
+				return false
+			end
 			return darkHarvestChannelingFinished()
 		end,
 	},
@@ -578,7 +644,7 @@ SPELL_PRIORITY = {
 		target = "target",
 		enabled = true,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			return drainSoulChannelingFinished()
 		end,
 	},
@@ -591,7 +657,7 @@ SPELL_PRIORITY = {
 		target = "target", 
 		enabled = false,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			return true
 		end,
 	},
@@ -605,7 +671,7 @@ SPELL_PRIORITY = {
 		target = "target", 
 		enabled = false,
 		condition = function(unit)
-			if MovementEvents and MovementEvents:IsMoving() then return false end
+			if IsPlayerMoving() then return false end
 			return true
 		end,
 	},
@@ -620,7 +686,7 @@ SPELL_PRIORITY = {
 		uitext    = "Shoot (Wand)",
 		condition = function(unit)
 			if WandShooting then return false end   -- Kern: nicht doppelt starten
-			if MovementEvents and MovementEvents:IsMoving() then return false end -- optional
+			if IsPlayerMoving() then return false end -- optional
 			return true
 		end,
 		enabled = false,
@@ -679,11 +745,26 @@ end
 -- =========================
 local function TryAction(entry)
   local t = entry.target or "target"
-	
-	-- Skip if not enabled
-	if entry.enabled == nil or entry.enabled == false then return false end
-	
-	-- Skip if DarkHarvest is Channeling (unless Nightfall override is active)
+
+  -- Skip if not enabled
+  if entry.enabled == nil or entry.enabled == false then return false end
+
+  -- Nampower queue guard: the nampower GCD queue is a single slot that is
+  -- overwritten on every CastSpellByName call (last-write-wins).  To prevent
+  -- a lower-priority spell from replacing a higher-priority spell that is
+  -- already queued, skip any spell whose priority is >= the queued priority.
+  -- Only a spell with STRICTLY higher priority (smaller number) is allowed
+  -- through.  The guard is lifted while a channel is active because channels
+  -- clear _npQueuedThisCast via SPELLCAST_STOP and the channel guards take over.
+  if AutoLock._npQueuedThisCast then
+    local isChanneling = DrainSoulChanneling or DarkHarvestChanneling
+    if not isChanneling then
+      local queuedPrio = AutoLock._npQueuedPriority or 99999
+      if (entry.priority or 99999) > queuedPrio then return false end
+    end
+  end
+
+  -- Skip if DarkHarvest is Channeling (unless Nightfall override is active)
 	if not darkHarvestChannelingFinished() then
 		if not isDHNightfallAllowed(entry) then return false end
 	end
@@ -696,9 +777,9 @@ local function TryAction(entry)
 		local outOfRange = AutoLock:IsSpellOutOfRange(entry.name)
 		if outOfRange == true then
 			return false
-		elseif outOfRange == nil then 
-			AutoLockLog.Warning("No Action-Slot for spell " .. entry.name .. " found! Range check not possible")
 		end
+		-- outOfRange == nil means no range data available (spell not on action bar,
+		-- Nampower returned -1). We proceed and let the server reject if out of range.
 		
 		local manaCostNextSpell =  AutoLock:GetSpellManaCostByName(entry.name)
 		local playerMana = UnitMana("player")
@@ -717,6 +798,13 @@ local function TryAction(entry)
 	
 	local ok = false
   if entry.type == "cast" then
+    -- Interrupt any active channel before casting a higher-priority spell.
+    -- ChannelStopCastingNextTick() signals nampower to cancel the channel on
+    -- its next update; we must call it before CastSpellByName so nampower's
+    -- queue accepts the new spell immediately.
+    if (DrainSoulChanneling or DarkHarvestChanneling) and ChannelStopCastingNextTick then
+      ChannelStopCastingNextTick()
+    end
     CastSpellByName(entry.name, t)
 		if entry.name == "Shadow Bolt" and AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight") then
 			ShadowTrancePending = true
@@ -725,7 +813,19 @@ local function TryAction(entry)
     end
 		ok = true
   elseif entry.type == "curse" then
+    -- Only call ChannelStopCastingNextTick if the curse genuinely needs to be
+    -- cast right now (HasCurse pre-check). This prevents interrupting a
+    -- DS/DH channel for a no-op curse (already up / refreshtime not met).
     if Cursive then
+      if (DrainSoulChanneling or DarkHarvestChanneling) and ChannelStopCastingNextTick then
+        if Cursive.curses then
+          local _, tGuid = UnitExists(t)
+          local rt = entry.refreshtime or 1
+          if not Cursive.curses:HasCurse(string.lower(entry.name), tGuid, rt) then
+            ChannelStopCastingNextTick()
+          end
+        end
+      end
       ok = Cursive:Curse(entry.name, t, { refreshtime = entry.refreshtime or 1 })
     end
 	elseif entry.type == "trinket" then
@@ -737,8 +837,21 @@ local function TryAction(entry)
         ok = true
       end
   end
-	if ok then SpellStartedName = entry.name end
+  if ok then
+    SpellStartedName = entry.name
+    AutoLock._npQueuedThisCast = true
+    AutoLock._npQueuedPriority = entry.priority or 99999
+  end
   return ok
+end
+
+-- Runs TryAction on each entry; returns the name of the first spell that fires, or nil.
+-- Must be defined after TryAction (local function) to capture it as an upvalue.
+function AutoLock:_testRunList(list)
+  for _, entry in ipairs(list) do
+    if TryAction(entry) then return entry.name end
+  end
+  return nil
 end
 
 -- =========================

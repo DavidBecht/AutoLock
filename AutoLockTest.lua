@@ -622,6 +622,244 @@ def_suite("cosCoaMutualExclusion", function()
 end)
 
 -- =============================================================
+-- Rotation integration tests (suites 13–14)
+-- These call AutoLock:_testRunList() which invokes the real TryAction.
+-- All WoW API functions that TryAction touches are replaced with stubs
+-- for the duration of each suite and restored in the cleanup block.
+-- =============================================================
+
+-- ── Nampower stub + WoW API mock environment ─────────────────
+-- Returns an env table; call env:restore() when done.
+local function rot_env_new()
+  local env = {
+    lastCast         = nil,
+    hasShadowTrance  = false,
+    -- np.casting / np.channeling control GetCurrentCastingInfo return values.
+    np = { casting = nil, channeling = nil },
+  }
+
+  -- Save originals
+  env._o = {
+    GCCI  = GetCurrentCastingInfo,
+    CSBN  = CastSpellByName,
+    UE    = UnitExists,
+    UM    = UnitMana,
+    ISOR  = AutoLock.IsSpellOutOfRange,
+    GSMCB = AutoLock.GetSpellManaCostByName,
+    HAB   = AutoLock.HasAnyBuff,
+    Cur   = Cursive,
+    DB    = AutoLockDB,
+    CCN   = AutoLock._combatConfigName,
+    NpQ   = AutoLock._npQueuedThisCast,
+    NpP   = AutoLock._npQueuedPriority,
+  }
+
+  local e = env   -- upvalue for closures
+
+  -- Nampower stub: returns whatever env.np holds
+  GetCurrentCastingInfo = function()
+    return e.np.casting or nil, e.np.channeling or nil
+  end
+
+  -- CastSpellByName: just record the name
+  CastSpellByName = function(name) e.lastCast = name end
+
+  -- Target always exists, with a stable GUID
+  UnitExists = function(u)
+    if u == "target" then return 1, "test-0000" end
+    return nil
+  end
+
+  -- Player has infinite mana (skip Life Tap path)
+  UnitMana = function() return 10000 end
+
+  -- Always in range
+  AutoLock.IsSpellOutOfRange = function() return false end
+
+  -- Return nil → mana check block is skipped entirely
+  AutoLock.GetSpellManaCostByName = function() return nil end
+
+  -- Shadow Trance buff controlled by env.hasShadowTrance
+  AutoLock.HasAnyBuff = function(_, unit, buff)
+    return e.hasShadowTrance and buff == "Shadow Trance"
+  end
+
+  -- Cursive stub: always reports curses as present; Curse() always succeeds
+  Cursive = {
+    curses = { HasCurse = function() return true end },
+    Curse  = function(_, name) e.lastCast = name; return true end,
+  }
+
+  -- Minimal AutoLockDB so darkHarvestDotsReady + isDHNightfallAllowed work
+  AutoLockDB = {
+    configs = { {
+      name                    = "rot_test",
+      darkHarvestDots         = {},
+      darkHarvestAllowNightfall = false,
+    } },
+    activeConfig = "rot_test",
+  }
+  AutoLock._combatConfigName = nil   -- use activeConfig
+
+  function env:restore()
+    GetCurrentCastingInfo           = self._o.GCCI
+    CastSpellByName                 = self._o.CSBN
+    UnitExists                      = self._o.UE
+    UnitMana                        = self._o.UM
+    AutoLock.IsSpellOutOfRange      = self._o.ISOR
+    AutoLock.GetSpellManaCostByName = self._o.GSMCB
+    AutoLock.HasAnyBuff             = self._o.HAB
+    Cursive                         = self._o.Cur
+    AutoLockDB                      = self._o.DB
+    AutoLock._combatConfigName      = self._o.CCN
+    AutoLock._npQueuedThisCast      = self._o.NpQ
+    AutoLock._npQueuedPriority      = self._o.NpP
+    AutoLock:_testSetDrainSoulChanneling(false)
+    AutoLock:_testSetDarkHarvestChanneling(false)
+  end
+
+  return env
+end
+
+-- Minimal sorted spell list that mirrors the real rotation priorities.
+-- Conditions are simplified (no IsPlayerMoving, IsOnCooldown, etc.) so
+-- each test controls pass/fail purely through state + mocks.
+local function rot_spells()
+  return {
+    { name="Shadow Bolt",    type="cast",  priority=1,  enabled=true, target="target",
+      condition=function()
+        return AutoLock:HasAnyBuff("player", "Shadow Trance", "Spell_Shadow_Twilight")
+      end },
+    { name="Curse of Agony", type="curse", priority=7,  enabled=true, target="target",
+      refreshtime=0, condition=function() return true end },
+    { name="Dark Harvest",   type="cast",  priority=22, enabled=true, target="target",
+      condition=function() return true end },
+    { name="Drain Soul",     type="cast",  priority=23, enabled=true, target="target",
+      condition=function() return true end },
+  }
+end
+
+-- =============================================================
+-- Suite 13: nampower_guard
+-- Verifies the priority-based GCD-queue guard in TryAction.
+-- After a spell fires, _npQueuedPriority is stored.  On the next
+-- DoAutoLock call during a GCD (casting=true, channeling=nil),
+-- only spells with STRICTLY lower priority number may fire.
+-- =============================================================
+def_suite("nampower_guard", function()
+  local env = rot_env_new()
+  local ok, err = pcall(function()
+    local s = rot_spells()
+
+    -- T1: No GCD, no queue → DH (prio 22) fires before DS (prio 23)
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+    env.np.casting   = nil
+    env.np.channeling = nil
+    eq(AutoLock:_testRunList(s), "Dark Harvest",
+      "nampower_guard T1: no GCD → DH fires before DS")
+
+    -- T2: Curse queued (prio 7), GCD active → DH (22>=7) and DS (23>=7) blocked
+    AutoLock._npQueuedThisCast = true
+    AutoLock._npQueuedPriority = 7
+    env.np.casting   = true
+    env.np.channeling = nil
+    is_nil(AutoLock:_testRunList(s),
+      "nampower_guard T2: curse GCD prio7 → DH+DS both blocked")
+
+    -- T3: DS queued (prio 23), GCD active → DH (22 < 23) NOT blocked → fires
+    AutoLock._npQueuedThisCast = true
+    AutoLock._npQueuedPriority = 23
+    env.np.casting   = true
+    eq(AutoLock:_testRunList(s), "Dark Harvest",
+      "nampower_guard T3: DS queued (prio23) → DH overrides queue")
+
+    -- T4: DS queued (prio 23), DH disabled → DS (23>=23) also blocked → nil
+    s[3].enabled = false
+    is_nil(AutoLock:_testRunList(s),
+      "nampower_guard T4: DS queued, DH disabled → DS itself blocked")
+    s[3].enabled = true
+
+    -- T5: GCD done → DH fires normally again
+    AutoLock._npQueuedThisCast = false
+    env.np.casting   = nil
+    eq(AutoLock:_testRunList(s), "Dark Harvest",
+      "nampower_guard T5: after GCD → DH fires normally")
+
+    -- T6: SB Nightfall (prio 1) queued, GCD active → everything (DH=22, DS=23) blocked
+    AutoLock._npQueuedThisCast = true
+    AutoLock._npQueuedPriority = 1
+    env.np.casting   = true
+    is_nil(AutoLock:_testRunList(s),
+      "nampower_guard T6: SB prio1 queued → nothing can override")
+  end)
+  env:restore()
+  if not ok then T_fail("[nampower_guard] crashed", tostring(err)) end
+end)
+
+-- =============================================================
+-- Suite 14: channeling_guard
+-- Verifies TryAction behaviour while DS or DH is channeling.
+--
+-- DS channeling: the priority guard is INACTIVE (casting=nil →
+-- guard condition `casting and not channeling` is false).  Higher-
+-- priority spells (DH, Nightfall SB) evaluate freely.
+--
+-- DH channeling: the DH-channeling guard blocks ALL spells that
+-- are not the Nightfall SB (when darkHarvestAllowNightfall=true).
+-- =============================================================
+def_suite("channeling_guard", function()
+  local env = rot_env_new()
+  local ok, err = pcall(function()
+    local s = rot_spells()
+    -- Reset queue so priority guard is never armed during these tests
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+
+    -- ── DS channeling ─────────────────────────────────────────
+    AutoLock:_testSetDrainSoulChanneling(true)
+    AutoLock:_testSetDrainSoulTiming(GetTime(), 15)
+    env.np.casting    = nil
+    env.np.channeling = true   -- nampower: channel active
+
+    -- T1: No proc → DH (prio 22) fires; DS channel doesn't block DH
+    env.hasShadowTrance = false
+    eq(AutoLock:_testRunList(s), "Dark Harvest",
+      "channeling_guard T1: DS channeling, no proc → DH fires (DS doesn't block DH)")
+
+    -- T2: Shadow Trance proc → SB (prio 1) fires first, overrides DH
+    env.hasShadowTrance = true
+    eq(AutoLock:_testRunList(s), "Shadow Bolt",
+      "channeling_guard T2: DS channeling + Shadow Trance → SB fires")
+    env.hasShadowTrance = false
+
+    -- ── DH channeling ─────────────────────────────────────────
+    AutoLock:_testSetDrainSoulChanneling(false)
+    AutoLock:_testSetDarkHarvestChanneling(true)
+    AutoLock:_testSetDarkHarvestTiming(GetTime(), 15)
+    env.np.channeling = true
+
+    -- T3: DH channeling, no proc, Nightfall off → everything blocked
+    AutoLockDB.configs[1].darkHarvestAllowNightfall = false
+    is_nil(AutoLock:_testRunList(s),
+      "channeling_guard T3: DH channeling, Nightfall off → DH+DS both blocked")
+
+    -- T4: DH channeling, Nightfall on, no proc → still nothing (condition fails)
+    AutoLockDB.configs[1].darkHarvestAllowNightfall = true
+    env.hasShadowTrance = false
+    is_nil(AutoLock:_testRunList(s),
+      "channeling_guard T4: DH channeling, Nightfall on, no proc → nothing")
+
+    -- T5: DH channeling, Nightfall on, proc active → SB fires
+    env.hasShadowTrance = true
+    eq(AutoLock:_testRunList(s), "Shadow Bolt",
+      "channeling_guard T5: DH channeling + Nightfall on + proc → SB fires")
+  end)
+  env:restore()
+  if not ok then T_fail("[channeling_guard] crashed", tostring(err)) end
+end)
+
+-- =============================================================
 -- Runner (global, no dependency on AutoLock object)
 -- =============================================================
 function AutoLockTests(filter)
