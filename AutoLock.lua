@@ -168,6 +168,7 @@ local function targetGuid(unit)
 end
 
 local function HasMalediction()
+  if not GetNumTalents then return false end
   for i = 1, GetNumTalents(1) do  -- Tab 1 = Affliction
     local name, _, _, _, currentRank = GetTalentInfo(1, i)
     if name == "Malediction" and currentRank > 0 then
@@ -188,6 +189,7 @@ local IMMOLATE_NAME = "Immolate"
 local DRAIN_SOUL_NAME = "Drain Soul"
 local DARK_HARVEST_NAME = "Dark Harvest"
 local SpellStartedName = nil
+local FacingFailedSpell = nil
 
 local WandShooting = false
 local DrainSoulChanneling = false
@@ -239,6 +241,9 @@ end
 
 
 -- Test hooks: allow unit tests to control internal state without WoW events.
+function AutoLock:_testSetFacingFailedSpell(v)
+  FacingFailedSpell = v
+end
 function AutoLock:_testSetDrainSoulChanneling(v)
   DrainSoulChanneling = v
 end
@@ -338,6 +343,7 @@ f:RegisterEvent("START_AUTOREPEAT_SPELL")
 f:RegisterEvent("STOP_AUTOREPEAT_SPELL")
 f:RegisterEvent("BAG_UPDATE")
 f:RegisterEvent("SPELLS_CHANGED")
+f:RegisterEvent("UI_ERROR_MESSAGE")
 
 f:SetScript("OnEvent", function()
   local E = event
@@ -412,6 +418,15 @@ f:SetScript("OnEvent", function()
 	elseif E == "SPELLS_CHANGED" then
 		AutoLock:BuildKnownSpellSet()
 		if frame and frame:IsShown() then AutoLock:PrioScrollUpdate() end  -- refresh list now that KnownSpells is current
+
+	elseif E == "UI_ERROR_MESSAGE" then
+		-- If a spell failed because the target is not in front, continue the rotation
+		-- so higher-priority procs (e.g. Nightfall) don't silently block the next spell.
+		if arg1 == "Target needs to be in front of you" or arg1 == SPELL_FAILED_UNIT_NOT_INFRONT then
+			FacingFailedSpell = SpellStartedName
+			-- AutoLock._npQueuedThisCast = false
+			-- AutoLock._npQueuedPriority = 99999
+		end
 	end
 end)
 
@@ -754,7 +769,11 @@ local function TryAction(entry)
 
   -- Skip if not enabled
   if entry.enabled == nil or entry.enabled == false then return false end
-
+  -- Skip spell that just failed due to facing; clear so the next press retries it
+  if FacingFailedSpell and entry.name == FacingFailedSpell then
+    FacingFailedSpell = nil
+    return false
+  end
   -- Nampower queue guard: the nampower GCD queue is a single slot that is
   -- overwritten on every CastSpellByName call (last-write-wins).  To prevent
   -- a lower-priority spell from replacing a higher-priority spell that is

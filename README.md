@@ -1,7 +1,7 @@
 # AutoLock
 
 > **Priority-based spell rotation addon for Warlocks on [TurtleWoW](https://turtle-wow.org) (Vanilla WoW 1.12)**
-> Version 1.0.4
+> Version 1.0.6
 
 ![alt text](assets/main_window.png)
 
@@ -273,13 +273,15 @@ When `AutoLock:DoAutoLock()` is called (via keybind macro or the spellbook butto
 DoAutoLock()
   └─ for each entry in priority order:
        1. Skip if disabled
-       2. Skip if Dark Harvest is still channeling (unless Nightfall proc is allowed via DH Cfg)
-       3. Skip if the spell's custom condition() returns false
+       2. Skip if this spell just failed due to facing ("Target needs to be in front of you")
+          → clears the flag so the next press retries it
+       3. Skip if Dark Harvest is still channeling (unless Nightfall proc is allowed via DH Cfg)
+       4. Skip if the spell's custom condition() returns false
           (Shadow Trance proc, cooldown, movement, HP/mana thresholds…)
-       4. Skip if out of range  (requires the spell to be on an action bar slot)
-       5. If mana is too low → cast Life Tap (if enabled in Settings)
+       5. Skip if out of range  (requires the spell to be on an action bar slot)
+       6. If mana is too low → cast Life Tap (if enabled in Settings)
           → return false so the spell is skipped this tick
-       6. Fire the spell / trinket / pet action → return true (stops the loop)
+       7. Fire the spell / trinket / pet action → return true (stops the loop)
 ```
 
 Because only **one action fires per call**, spam the macro as fast as your GCD allows.

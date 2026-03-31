@@ -645,7 +645,7 @@ suite("cosCoaMutualExclusion", function()
         return name == "curse of shadow"
       end }
     }
-    is_false(coaCond("target"), "CoS active: CoA returns false (mutual exclusion)")
+    is_true(coaCond("target"), "CoS active: CoA returns true (guard removed, Cursive handles slot)")
 
     -- DS blocking takes precedence
     AutoLock:_testSetDrainSoulChanneling(true)
@@ -1690,6 +1690,65 @@ suite("agony_refreshtime_with_cos_enabled", function()
   end)
   restore()
   if not pass then fail("[agony_refreshtime_with_cos_enabled] crashed", tostring(err)) end
+end)
+
+-- ============================================================
+-- Suite: facing_curse_fallback
+-- When a cast-type spell (Death Coil) fails due to facing, the
+-- rotation must stop at the next curse-type spell (Siphon Life)
+-- that genuinely needs casting (HasCurse returns false = not up).
+--
+-- Root issue: Cursive:Curse() returns false/nil, so ok=false for
+-- ALL curse entries regardless of whether they were actually cast.
+-- The rotation never stops at a curse, falling through to nothing
+-- after Death Coil is FacingFailed-skipped.
+-- ============================================================
+suite("facing_curse_fallback", function()
+  local env = rot_env_new()
+  local pass, err = pcall(function()
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+
+    -- Realistic stub: Cursive:Curse returns true when it casts (curse absent),
+    -- false when curse is already up. Siphon Life is NOT on target.
+    local cursesUp = { ["curse of shadow"]=true, ["curse of agony"]=true, ["corruption"]=true }
+    Cursive = {
+      curses = { HasCurse = function(_, name) return cursesUp[name] == true end },
+      Curse  = function(_, name)
+        local lower = string.lower(name)
+        if cursesUp[lower] then return false end
+        cursesUp[lower] = true
+        env.lastCast = name
+        return true
+      end,
+    }
+
+    local s = {
+      { name="Curse of Shadow", type="curse", priority=6,  enabled=true, target="target",
+        refreshtime=0, condition=function() return true end },
+      { name="Curse of Agony",  type="curse", priority=7,  enabled=true, target="target",
+        refreshtime=0, condition=function() return true end },
+      { name="Corruption",      type="curse", priority=8,  enabled=true, target="target",
+        refreshtime=0, condition=function() return true end },
+      { name="Death Coil",      type="cast",  priority=17, enabled=true, target="target",
+        condition=function() return true end },
+      { name="Siphon Life",     type="curse", priority=18, enabled=true, target="target",
+        refreshtime=0, condition=function() return true end },
+    }
+
+    -- Death Coil failed due to facing; CoS/CoA/Corruption already up
+    AutoLock:_testSetFacingFailedSpell("Death Coil")
+    local cast = AutoLock:_testRunList(s)
+    AutoLock:_testSetFacingFailedSpell(nil)
+
+    -- Expected: DC skipped, CoS/CoA/Corruption already up (Cursive returns false),
+    -- SL not up → Cursive:Curse("Siphon Life") returns true → rotation stops at SL
+    eq(cast, "Siphon Life",
+      "facing_curse_fallback: DC skipped (facing), SL fires as fallback")
+  end)
+  env:restore()
+  AutoLock:_testSetFacingFailedSpell(nil)
+  if not pass then fail("[facing_curse_fallback] crashed", tostring(err)) end
 end)
 
 -- ============================================================

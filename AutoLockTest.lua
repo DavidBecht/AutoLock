@@ -595,7 +595,7 @@ def_suite("cosCoaMutualExclusion", function()
     }
     is_true(coaCond("target"), "CoS absent: CoA condition returns true")
 
-    -- Cursive present, CoS IS on target -> CoA blocked (don't overwrite)
+    -- Cursive present, CoS IS on target -> CoA allowed (guard removed; Cursive handles mutual exclusion)
     Cursive = {
       curses = {
         HasCurse = function(self, name, guid, refresh)
@@ -603,7 +603,7 @@ def_suite("cosCoaMutualExclusion", function()
         end
       }
     }
-    is_false(coaCond("target"), "CoS active: CoA condition returns false (mutual exclusion)")
+    is_true(coaCond("target"), "CoS active: CoA condition returns true (guard removed, Cursive handles slot)")
 
     -- DS blocking takes precedence even when CoS is absent
     AutoLock:_testSetDrainSoulChanneling(true)
@@ -652,6 +652,8 @@ local function rot_env_new()
     CCN   = AutoLock._combatConfigName,
     NpQ   = AutoLock._npQueuedThisCast,
     NpP   = AutoLock._npQueuedPriority,
+    GNT   = GetNumTalents,
+    GTI   = GetTalentInfo,
   }
 
   local e = env   -- upvalue for closures
@@ -684,6 +686,10 @@ local function rot_env_new()
     return e.hasShadowTrance and buff == "Shadow Trance"
   end
 
+  -- Talent stubs: no Malediction by default
+  GetNumTalents = function() return 0 end
+  GetTalentInfo = function() return nil end
+
   -- Cursive stub: always reports curses as present; Curse() always succeeds
   Cursive = {
     curses = { HasCurse = function() return true end },
@@ -714,6 +720,8 @@ local function rot_env_new()
     AutoLock._combatConfigName      = self._o.CCN
     AutoLock._npQueuedThisCast      = self._o.NpQ
     AutoLock._npQueuedPriority      = self._o.NpP
+    GetNumTalents                   = self._o.GNT
+    GetTalentInfo                   = self._o.GTI
     AutoLock:_testSetDrainSoulChanneling(false)
     AutoLock:_testSetDarkHarvestChanneling(false)
   end
@@ -857,6 +865,79 @@ def_suite("channeling_guard", function()
   end)
   env:restore()
   if not ok then T_fail("[channeling_guard] crashed", tostring(err)) end
+end)
+
+-- =============================================================
+-- Suite 15: facing_curse_fallback
+-- When a cast-type spell (Death Coil) fails due to facing and the
+-- next eligible spell is a curse-type (Siphon Life), the rotation
+-- should stop at the curse and not fall through to nothing.
+--
+-- Root issue: Cursive:Curse() returns nil in the real addon, so
+-- ok=nil, TryAction returns falsy for ALL curse entries, and the
+-- rotation never stops at a curse even when it casts one.
+-- =============================================================
+def_suite("facing_curse_fallback", function()
+  local env = rot_env_new()
+  -- Override Cursive stub to return nil (real Cursive behaviour)
+  Cursive = {
+    curses = { HasCurse = function() return false end },  -- curse not on target
+    Curse  = function(_, name) env.lastCast = name; return nil end,
+  }
+  local ok, err = pcall(function()
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+
+    -- Rotation: Death Coil (cast, prio 17) → Siphon Life (curse, prio 18)
+    local s = {
+      { name="Death Coil",  type="cast",  priority=17, enabled=true, target="target",
+        condition=function() return true end },
+      { name="Siphon Life", type="curse", priority=18, enabled=true, target="target",
+        refreshtime=0, condition=function() return true end },
+    }
+
+    -- Simulate Death Coil failing due to facing
+    AutoLock:_testSetFacingFailedSpell("Death Coil")
+
+    -- Expected: Siphon Life fires as fallback
+    local cast = AutoLock:_testRunList(s)
+    AutoLock:_testSetFacingFailedSpell(nil)
+
+    eq(cast, "Siphon Life", "facing_curse_fallback: DC skipped, Siphon Life fires via curse path")
+  end)
+  env:restore()
+  AutoLock:_testSetFacingFailedSpell(nil)
+  if not ok then T_fail("[facing_curse_fallback] crashed", tostring(err)) end
+end)
+
+-- =============================================================
+-- Suite 15b: facing_guard (cast-type fallback — already passes)
+-- When a spell fails due to facing (target not in front), the
+-- rotation should skip that spell and fire the next eligible one.
+-- =============================================================
+def_suite("facing_guard", function()
+  local env = rot_env_new()
+  local ok, err = pcall(function()
+    local s = rot_spells()
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+
+    -- Shadow Trance proc is active → Shadow Bolt condition passes
+    env.hasShadowTrance = true
+
+    -- Simulate: Shadow Bolt just failed due to facing
+    AutoLock:_testSetFacingFailedSpell("Shadow Bolt")
+
+    -- Rotation should skip Shadow Bolt and cast the next eligible spell (Curse of Agony)
+    local cast = AutoLock:_testRunList(s)
+
+    AutoLock:_testSetFacingFailedSpell(nil)
+
+    eq(cast, "Curse of Agony", "facing_guard: Shadow Bolt skipped, Curse of Agony fires next")
+  end)
+  env:restore()
+  AutoLock:_testSetFacingFailedSpell(nil)
+  if not ok then T_fail("[facing_guard] crashed", tostring(err)) end
 end)
 
 -- =============================================================
