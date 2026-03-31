@@ -291,37 +291,42 @@ local function isDHNightfallAllowed(entry)
 end
 
 local function darkHarvestDotsReady()
-  local req = nil
+  local cfg = nil
   local combatName = AutoLock._combatConfigName or (AutoLockDB and AutoLockDB.activeConfig)
   if combatName and AutoLockDB and AutoLockDB.configs then
     for _, c in ipairs(AutoLockDB.configs) do
       if c.name == combatName then
-        req = c.darkHarvestDots
+        cfg = c
         break
       end
     end
   end
-  if not req then return true end
 
   local _, targetGuid = UnitExists("target")
 
-  for key, curseName in pairs(DARK_HARVEST_CURSE_NAMES) do
-    if req[key] then
-      local malediction = HasMalediction() and 1 or 0
-      local satisfied = Cursive and Cursive.curses:HasCurse(curseName, targetGuid, 0, malediction)
-      if not satisfied then
-        local alt = DARK_HARVEST_CURSE_ALTERNATIVES[key]
-        satisfied = alt and Cursive and Cursive.curses:HasCurse(alt, targetGuid, 0, malediction)
+  -- Require enough dot time remaining for maximum DH damage
+  if cfg and cfg.darkHarvestRequireFullDotTime and Cursive then
+    local dhDuration = AutoLock:GetSpellDurationByName("Dark Harvest")
+    if dhDuration then
+      local required = dhDuration * 1.3
+      local guids = Cursive.curses.guids
+      local function rem(name)
+        local d = guids[targetGuid] and guids[targetGuid][name]
+        return d and Cursive.curses:TimeRemaining(d) or 0
       end
-      if not satisfied then return false end
+      -- nil means default-on (not yet explicitly unchecked)
+      local dotSel = cfg.darkHarvestFullDotTimeDots or {}
+      if dotSel.agony      ~= false and rem("curse of agony") < required then return false end
+      if dotSel.corruption ~= false and rem("corruption")     < required then return false end
+      if dotSel.siphonLife ~= false and rem("siphon life")    < required then return false end
     end
   end
 
-  for key, debuffName in pairs(DARK_HARVEST_DEBUFF_NAMES) do
-    if req[key] then
-      if not AutoLock:HasDebuffByName("target", debuffName) then
-        return false
-      end
+  -- shadowVuln (non-Cursive debuff, configurable via DH Cfg)
+  local req = cfg and cfg.darkHarvestDots
+  if req and req.shadowVuln then
+    if not AutoLock:HasDebuffByName("target", DARK_HARVEST_DEBUFF_NAMES.shadowVuln) then
+      return false
     end
   end
 
@@ -907,7 +912,61 @@ function AutoLock:DoAutoLock(configName)
   end
 end
 
+-- Debug: print remaining time of DH-affected dots on the current target.
+-- Usage in-game: /run AutoLock:PrintDotTimers()
+function AutoLock:PrintDotTimers()
+  if not Cursive then
+    AutoLockLog.Warning("PrintDotTimers: Cursive not loaded")
+    return
+  end
 
+  local _, guid = UnitExists("target")
+  if not guid then
+    AutoLockLog.Warning("PrintDotTimers: no target")
+    return
+  end
+
+  local dhDuration = AutoLock:GetSpellDurationByName("Dark Harvest")
+  local required   = dhDuration and (dhDuration * 1.3) or nil
+
+  local dots = {
+    { key = "curse of agony",  label = "Curse of Agony" },
+    { key = "corruption",      label = "Corruption"     },
+    { key = "siphon life",     label = "Siphon Life"    },
+  }
+
+  AutoLockLog.Info("=== Dot Timers (target) ===")
+  for _, dot in ipairs(dots) do
+    local curseData = Cursive.curses.guids[guid] and Cursive.curses.guids[guid][dot.key]
+    if curseData then
+      local remaining = Cursive.curses:TimeRemaining(curseData)
+      local suffix = ""
+      if required then
+        if remaining >= required then
+          suffix = " |cff00cc00OK|r (>= " .. string.format("%.1f", required) .. "s needed)"
+        else
+          suffix = " |cffff4444LOW|r (need " .. string.format("%.1f", required) .. "s)"
+        end
+      end
+      AutoLockLog.Info(dot.label .. ": " .. string.format("%.1f", remaining) .. "s" .. suffix)
+    else
+      AutoLockLog.Info(dot.label .. ": |cffaaaaaamissing|r")
+    end
+  end
+
+  if dhDuration then
+    -- Also print raw ms so we can verify nampower's value matches the real cast time
+    local rawMs = GetSpellSlotTypeIdForName and GetSpellDuration and (function()
+      local _, _, spellId = GetSpellSlotTypeIdForName("Dark Harvest")
+      return spellId and GetSpellDuration(spellId)
+    end)() or nil
+    local rawInfo = rawMs and ("  [raw: " .. rawMs .. "ms]") or ""
+    AutoLockLog.Info("DH duration: " .. string.format("%.2f", dhDuration) .. "s" .. rawInfo
+      .. "  |  Required: " .. string.format("%.2f", required) .. "s")
+  else
+    AutoLockLog.Warning("DH duration: unknown (spell not found)")
+  end
+end
 
 
 

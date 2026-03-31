@@ -268,34 +268,45 @@ end)
 
 -- ── darkHarvestDotsReady ─────────────────────────────────────
 suite("darkHarvestDotsReady", function()
-  local function dotsReady(req, cursiveHas, debuffOn)
-    if not req then return true end
-    local CURSES  = { agony="curse of agony", corruption="corruption", siphonLife="siphon life" }
-    local DEBUFFS = { shadowVuln="Shadow Vulnerability" }
-    for k, name in pairs(CURSES) do
-      if req[k] then if not cursiveHas(name) then return false end end
+  local DH_DURATION = 6.0
+
+  -- Mirror the real darkHarvestDotsReady logic
+  local function dotsReady(cfg, timeRemaining, debuffOn)
+    if cfg and cfg.darkHarvestRequireFullDotTime then
+      local required = DH_DURATION * 1.3
+      local function rem(name) return timeRemaining and timeRemaining(name) or 0 end
+      local dotSel = (cfg and cfg.darkHarvestFullDotTimeDots) or {}
+      if dotSel.agony      ~= false and rem("curse of agony") < required then return false end
+      if dotSel.corruption ~= false and rem("corruption")     < required then return false end
+      if dotSel.siphonLife ~= false and rem("siphon life")    < required then return false end
     end
-    for k, name in pairs(DEBUFFS) do
-      if req[k] then if not debuffOn(name) then return false end end
+    local req = cfg and cfg.darkHarvestDots
+    if req and req.shadowVuln then
+      if not debuffOn("Shadow Vulnerability") then return false end
     end
     return true
   end
 
-  local YES = function(_) return true  end
-  local NO  = function(_) return false end
+  local ENOUGH = function(_) return DH_DURATION * 1.3 end
+  local LOW    = function(_) return 0 end
+  local YES    = function(_) return true  end
+  local NO     = function(_) return false end
 
-  is_true (dotsReady(nil,  YES, YES), "nil req → ready")
-  is_true (dotsReady({},   YES, YES), "empty req → ready")
-  is_true (dotsReady({ agony=true },  YES, YES), "agony required+present")
-  is_false(dotsReady({ agony=true },  NO,  YES), "agony required+missing")
-  is_true (dotsReady({ agony=true, corruption=false }, YES, YES), "corruption=false skipped")
-  is_true (dotsReady({ shadowVuln=true }, YES, YES), "shadowVuln required+present")
-  is_false(dotsReady({ shadowVuln=true }, YES, NO),  "shadowVuln required+missing")
-  local noSiphon = function(n) return n ~= "siphon life" end
-  is_false(dotsReady({ agony=true, siphonLife=true }, noSiphon, YES), "siphonLife missing")
-  is_true (dotsReady(
-    { agony=true, corruption=true, siphonLife=true, shadowVuln=true },
-    YES, YES), "all required+present")
+  is_true (dotsReady(nil,  ENOUGH, YES), "nil req → ready")
+  is_true (dotsReady({},   ENOUGH, YES), "empty cfg → ready")
+  is_true (dotsReady({ darkHarvestRequireFullDotTime=false }, LOW, YES), "requireFullDotTime=false → ready")
+  is_true (dotsReady({ darkHarvestRequireFullDotTime=true  }, ENOUGH, YES), "all dots enough → ready")
+  local lowSiphon = function(n) return n == "siphon life" and 0 or DH_DURATION * 1.3 end
+  is_false(dotsReady({ darkHarvestRequireFullDotTime=true }, lowSiphon, YES), "siphon life low → blocked")
+  is_true (dotsReady({ darkHarvestRequireFullDotTime=true,
+    darkHarvestFullDotTimeDots={ siphonLife=false } }, lowSiphon, YES),
+    "siphonLife sub-unchecked → siphon low ignored → ready")
+  local lowAgony = function(n) return n == "curse of agony" and 0 or DH_DURATION * 1.3 end
+  is_true (dotsReady({ darkHarvestRequireFullDotTime=true,
+    darkHarvestFullDotTimeDots={ agony=false } }, lowAgony, YES),
+    "agony sub-unchecked → agony low ignored → ready")
+  is_true (dotsReady({ darkHarvestDots={ shadowVuln=true } }, ENOUGH, YES), "shadowVuln required+present")
+  is_false(dotsReady({ darkHarvestDots={ shadowVuln=true } }, ENOUGH, NO),  "shadowVuln required+missing")
 end)
 
 -- ── isBlockedByDrainSoul (pure logic) ────────────────────────

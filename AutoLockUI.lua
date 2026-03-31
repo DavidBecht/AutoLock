@@ -628,7 +628,7 @@ local dhDotsPopup = nil
 local function ShowDHDotsPopup(anchor)
   if not dhDotsPopup then
     dhDotsPopup = CreateFrame("Frame", "AutoLockDHDotsPopup", UIParent)
-    dhDotsPopup:SetWidth(220); dhDotsPopup:SetHeight(236)
+    dhDotsPopup:SetWidth(220); dhDotsPopup:SetHeight(255)
     dhDotsPopup:SetFrameStrata("TOOLTIP")
     dhDotsPopup:SetBackdrop({
       bgFile   = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -645,7 +645,7 @@ local function ShowDHDotsPopup(anchor)
 
     local title = dhDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     title:SetPoint("TOP", dhDotsPopup, "TOP", 0, -10)
-    title:SetText("Dark Harvest requires DoTs:")
+    title:SetText("Dark Harvest Cfg")
 
     local closeBtn = CreateFrame("Button", nil, dhDotsPopup, "UIPanelCloseButton")
     closeBtn:SetWidth(18); closeBtn:SetHeight(18)
@@ -679,14 +679,8 @@ local function ShowDHDotsPopup(anchor)
       return cb
     end
 
-    dhDotsPopup.agonyCheck      = makeDotCheck("agony",      "Curse of Agony",
-      nil, nil, "Curse of Agony must be active on the\ntarget before Dark Harvest can be cast.")
-    dhDotsPopup.corruptionCheck = makeDotCheck("corruption", "Corruption",
-      dhDotsPopup.agonyCheck, nil, "Corruption must be active on the\ntarget before Dark Harvest can be cast.")
-    dhDotsPopup.siphonCheck     = makeDotCheck("siphonLife", "Siphon Life",
-      dhDotsPopup.corruptionCheck, nil, "Siphon Life must be active on the\ntarget before Dark Harvest can be cast.")
     dhDotsPopup.shadowVulnCheck = makeDotCheck("shadowVuln", "Shadow Vulnerability",
-      dhDotsPopup.siphonCheck, nil, "Shadow Vulnerability must be active on the\ntarget before Dark Harvest can be cast.")
+      nil, nil, "Shadow Vulnerability must be active on the\ntarget before Dark Harvest can be cast.")
 
     -- Divider
     local divider = dhDotsPopup:CreateTexture(nil, "ARTWORK")
@@ -695,10 +689,57 @@ local function ShowDHDotsPopup(anchor)
     divider:SetPoint("TOPLEFT", dhDotsPopup.shadowVulnCheck, "BOTTOMLEFT", 0, -10)
     divider:SetTexture(0.4, 0.4, 0.4, 0.8)
 
+    -- Require full dot time checkbox
+    local fullDotTimeCb = CreateFrame("CheckButton", nil, dhDotsPopup, "UICheckButtonTemplate")
+    fullDotTimeCb:SetWidth(18); fullDotTimeCb:SetHeight(18)
+    fullDotTimeCb:SetPoint("TOPLEFT", divider, "BOTTOMLEFT", 0, -6)
+    fullDotTimeCb:SetScript("OnClick", function()
+      local cfg = GetActiveConfig()
+      if not cfg then return end
+      local newVal = not (cfg.darkHarvestRequireFullDotTime == true)
+      cfg.darkHarvestRequireFullDotTime = newVal
+      fullDotTimeCb:SetChecked(newVal and 1 or nil)
+    end)
+    fullDotTimeCb:SetScript("OnEnter", function()
+      ShowTooltip(this, "Require full dot time",
+        "Only cast Dark Harvest if CoA/CoS,\nCorruption and Siphon Life all have\nenough remaining time for full damage.\n(Minimum: DH duration x 1.3)")
+    end)
+    fullDotTimeCb:SetScript("OnLeave", function() AL_TT:Hide() end)
+    local fullDotTimeLbl = dhDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    fullDotTimeLbl:SetPoint("LEFT", fullDotTimeCb, "RIGHT", 4, 0)
+    fullDotTimeLbl:SetText("Require full dot time")
+    dhDotsPopup.fullDotTimeCheck = fullDotTimeCb
+
+    -- Sub-checkboxes for which dots must have enough time (indented under fullDotTimeCb)
+    local function makeSubDotCheck(key, label, prevAnchor, xOffset)
+      local cb = CreateFrame("CheckButton", nil, dhDotsPopup, "UICheckButtonTemplate")
+      cb:SetWidth(16); cb:SetHeight(16)
+      cb:SetPoint("TOPLEFT", prevAnchor, "BOTTOMLEFT", xOffset or 0, -4)
+      cb:SetScript("OnClick", function()
+        local cfg = GetActiveConfig()
+        if not cfg then return end
+        if not cfg.darkHarvestFullDotTimeDots then
+          cfg.darkHarvestFullDotTimeDots = {}
+        end
+        -- nil = default true; toggle: nil/true → false, false → true
+        local newVal = not (cfg.darkHarvestFullDotTimeDots[key] ~= false)
+        cfg.darkHarvestFullDotTimeDots[key] = newVal
+        cb:SetChecked(newVal and 1 or nil)
+      end)
+      local lbl = dhDotsPopup:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+      lbl:SetPoint("LEFT", cb, "RIGHT", 2, 0)
+      lbl:SetText(label)
+      return cb
+    end
+
+    dhDotsPopup.agonySubCheck      = makeSubDotCheck("agony",      "Curse of Agony",  fullDotTimeCb,              20)
+    dhDotsPopup.corruptionSubCheck = makeSubDotCheck("corruption",  "Corruption",      dhDotsPopup.agonySubCheck,   0)
+    dhDotsPopup.siphonLifeSubCheck = makeSubDotCheck("siphonLife",  "Siphon Life",     dhDotsPopup.corruptionSubCheck, 0)
+
     -- Nightfall checkbox (separate config key, not darkHarvestDots)
     local nightfallCb = CreateFrame("CheckButton", nil, dhDotsPopup, "UICheckButtonTemplate")
     nightfallCb:SetWidth(18); nightfallCb:SetHeight(18)
-    nightfallCb:SetPoint("TOPLEFT", divider, "BOTTOMLEFT", 0, -6)
+    nightfallCb:SetPoint("TOPLEFT", dhDotsPopup.siphonLifeSubCheck, "BOTTOMLEFT", -20, -8)
     nightfallCb:SetScript("OnClick", function()
       local cfg = GetActiveConfig()
       if not cfg then return end
@@ -750,10 +791,12 @@ local function ShowDHDotsPopup(anchor)
   -- Checkboxen vor Show() setzen damit der Zustand beim Öffnen korrekt ist
   local cfg = GetActiveConfig()
   local dh = (cfg and cfg.darkHarvestDots) or {}
-  dhDotsPopup.agonyCheck:SetChecked(dh.agony and 1 or nil)
-  dhDotsPopup.corruptionCheck:SetChecked(dh.corruption and 1 or nil)
-  dhDotsPopup.siphonCheck:SetChecked(dh.siphonLife and 1 or nil)
   dhDotsPopup.shadowVulnCheck:SetChecked(dh.shadowVuln and 1 or nil)
+  dhDotsPopup.fullDotTimeCheck:SetChecked(cfg and cfg.darkHarvestRequireFullDotTime and 1 or nil)
+  local fdtd = (cfg and cfg.darkHarvestFullDotTimeDots) or {}
+  dhDotsPopup.agonySubCheck:SetChecked(     fdtd.agony      ~= false and 1 or nil)
+  dhDotsPopup.corruptionSubCheck:SetChecked(fdtd.corruption  ~= false and 1 or nil)
+  dhDotsPopup.siphonLifeSubCheck:SetChecked(fdtd.siphonLife  ~= false and 1 or nil)
   dhDotsPopup.nightfallCheck:SetChecked(cfg and cfg.darkHarvestAllowNightfall and 1 or nil)
   dhDotsPopup.dhInterruptsCheck:SetChecked(
     (cfg == nil or cfg.darkHarvestInterruptsDS ~= false) and 1 or nil)

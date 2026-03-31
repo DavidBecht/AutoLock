@@ -1,7 +1,7 @@
 # AutoLock
 
 > **Priority-based spell rotation addon for Warlocks on [TurtleWoW](https://turtle-wow.org) (Vanilla WoW 1.12)**
-> Version 1.0.6
+> Version 1.0.7
 
 ![alt text](assets/main_window.png)
 
@@ -200,9 +200,11 @@ Click the **Cfg** button next to *Dark Harvest* to open the DH configuration pop
 
 | Checkbox | Default | Effect |
 |---|---|---|
-| **Corruption** | ✅ | Required dot before DH is cast |
-| **Curse of Agony / Curse of Shadow** | ✅ | Required dot before DH is cast |
-| **Siphon Life** | ✅ | Required dot before DH is cast |
+| **Shadow Vulnerability** | ❌ | Required debuff before DH is cast |
+| **Require full dot time** | ❌ | Only cast DH if the selected dots have enough remaining time for full damage (minimum: DH channel duration × 1.3). Sub-checkboxes select which dots are checked: |
+| &nbsp;&nbsp;&nbsp;Curse of Agony | ✅ | Check CoA remaining time |
+| &nbsp;&nbsp;&nbsp;Corruption | ✅ | Check Corruption remaining time |
+| &nbsp;&nbsp;&nbsp;Siphon Life | ✅ | Check Siphon Life remaining time |
 | **Allow Nightfall proc during channel** | ❌ | When checked, a Shadow Trance (Nightfall) proc at priority 1 is allowed to fire and interrupt the DH channel |
 | **DH interrupts Drain Soul** | ✅ | When unchecked, Dark Harvest will not interrupt an active Drain Soul channel — useful when you want DS to always run to completion before DH fires |
 
