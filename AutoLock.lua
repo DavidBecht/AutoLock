@@ -167,6 +167,16 @@ local function targetGuid(unit)
   return guid
 end
 
+local function HasMalediction()
+  for i = 1, GetNumTalents(1) do  -- Tab 1 = Affliction
+    local name, _, _, _, currentRank = GetTalentInfo(1, i)
+    if name == "Malediction" and currentRank > 0 then
+      return true
+    end
+  end
+  return false
+end
+
 local ShadowTranceCastedAt = 0
 local SHADOWTRANCE_POST_PAUSE = 2
 local ImmolateCastedAt = 0
@@ -292,10 +302,11 @@ local function darkHarvestDotsReady()
 
   for key, curseName in pairs(DARK_HARVEST_CURSE_NAMES) do
     if req[key] then
-      local satisfied = Cursive and Cursive.curses:HasCurse(curseName, targetGuid, 0)
+      local malediction = HasMalediction() and 1 or 0
+      local satisfied = Cursive and Cursive.curses:HasCurse(curseName, targetGuid, 0, malediction)
       if not satisfied then
         local alt = DARK_HARVEST_CURSE_ALTERNATIVES[key]
-        satisfied = alt and Cursive and Cursive.curses:HasCurse(alt, targetGuid, 0)
+        satisfied = alt and Cursive and Cursive.curses:HasCurse(alt, targetGuid, 0, malediction)
       end
       if not satisfied then return false end
     end
@@ -522,11 +533,6 @@ SPELL_PRIORITY = {
   { name = "Curse of Agony",  type = "curse", priority = 7, refreshtime = 0, target = "target", enabled = true,
     condition = function(unit)
       if isBlockedByDrainSoul("agony") then return false end
-      -- Curse of Shadow and Curse of Agony are mutually exclusive; don't overwrite CoS
-      if Cursive and Cursive.curses then
-        local _, tGuid = UnitExists("target")
-        if Cursive.curses:HasCurse("curse of shadow", tGuid, 0) then return false end
-      end
       return true
     end },
   { name = "Corruption",      type = "curse", priority = 8, refreshtime = 0, target = "target", enabled = true,
@@ -821,7 +827,7 @@ local function TryAction(entry)
         if Cursive.curses then
           local _, tGuid = UnitExists(t)
           local rt = entry.refreshtime or 1
-          if not Cursive.curses:HasCurse(string.lower(entry.name), tGuid, rt) then
+          if not Cursive.curses:HasCurse(string.lower(entry.name), tGuid, rt, HasMalediction() and 1 or 0) then
             ChannelStopCastingNextTick()
           end
         end
