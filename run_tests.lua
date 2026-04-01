@@ -66,6 +66,9 @@ local src = debug.getinfo(1, "S").source
 local dir = (src:match("^@(.+)[/\\]") or ".") .. "/"
 
 dofile(dir .. "AutoLock.lua")
+dofile(dir .. "AutoLockSoulShards.lua")
+dofile(dir .. "AutoLockEngine.lua")
+dofile(dir .. "AutoLockSpells.lua")
 
 -- Load nampower stub (used by the gcd_realworld suite).
 local NP = dofile(dir .. "nampower_stub.lua")
@@ -581,9 +584,11 @@ suite("cosDrainSoulBlocking", function()
 
   local savedDB  = AutoLockDB
   local savedCCN = AutoLock._combatConfigName
+  local savedCur = Cursive
   local function restore()
     AutoLockDB = savedDB
     AutoLock._combatConfigName = savedCCN
+    Cursive = savedCur
     AutoLock:_testSetDrainSoulChanneling(false)
   end
   local pass, err = pcall(function()
@@ -592,6 +597,11 @@ suite("cosDrainSoulBlocking", function()
       activeConfig = "CosDS",
     }
     AutoLock._combatConfigName = "CosDS"
+    -- CoS not on target: HasCurse guard must not interfere with the DS-blocking test.
+    Cursive = {
+      curses = { HasCurse = function() return false end },
+      Curse  = function() return false end,
+    }
 
     AutoLock:_testSetDrainSoulChanneling(true)
     AutoLock:_testSetDrainSoulTiming(GetTime(), 15)
@@ -1703,6 +1713,127 @@ suite("agony_refreshtime_with_cos_enabled", function()
   if not pass then fail("[agony_refreshtime_with_cos_enabled] crashed", tostring(err)) end
 end)
 
+-- ── cos_coa_rotation_stops ───────────────────────────────────
+-- Malediction talent rules (how CoS and CoA interact):
+--   1. Casting CoS → applies BOTH CoS and CoA to the target simultaneously.
+--   2. Casting CoA → applies only CoA (no CoS).
+--   3. CoS CANNOT refresh an existing CoA — but if CoA is on target and CoS
+--      is NOT yet applied, CoS can still be cast (adds the CoS bonus on top).
+--
+-- Bug trigger: after CoS fires (both CoS + CoA are now on target), the next
+-- macro press runs CoS again because its condition has no guard for
+-- "is CoS already on target?". Cursive sees CoS is up and returns a
+-- non-false truthy value ("handled") instead of false. AutoLock treats
+-- this as a successful cast:
+--   ok=truthy → SpellStartedName="Curse of Shadow" → _npQueuedThisCast=true
+--   No actual spell was cast → SPELLCAST_STOP never fires → flag stuck.
+-- Every subsequent press hits the same path; all spells with prio > 6 are
+-- blocked by the nampower guard. Rotation appears frozen.
+-- A manual spell cast fires SPELLCAST_STOP, clears the flag — which matches
+-- the user observation ("manually casting something fixes it").
+--
+-- Fix: add a HasCurse("curse of shadow") guard to CoS's condition so CoS
+-- is skipped when it is already on the target.
+-- The "CoA present but CoS absent" case must still pass (CoS is allowed then).
+suite("cos_coa_rotation_stops", function()
+  local env = rot_env_new()
+  local ok_r, err = pcall(function()
+    -- Everything on CD except curses and DS (realistic mid-fight state).
+    AutoLock.IsOnCooldown = function() return true end
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+    AutoLock._combatConfigName = "rot_test"
+
+    -- Track both curses independently (Malediction: CoS cast applies both).
+    local cosRemaining = 0.0
+    local coaRemaining = 0.0
+
+    -- Accurate Malediction/Cursive mock.
+    -- Key: when CoS is already on target, Cursive:Curse("CoS") returns a non-false
+    -- truthy value ("handled") instead of false — this is the bug trigger.
+    Cursive = {
+      curses = {
+        HasCurse = function(self, name, guid, refreshtime)
+          if name == "curse of shadow" then return cosRemaining > refreshtime end
+          if name == "curse of agony"  then return coaRemaining > refreshtime end
+          return false
+        end,
+      },
+      Curse = function(self, name, tgt, opts)
+        local rt = (opts and opts.refreshtime) or 1
+        if name == "Curse of Shadow" then
+          if cosRemaining > rt then
+            -- CoS already on target: Cursive "handles" it but does NOT cast.
+            -- Returns truthy instead of false — triggers the stuck-flag bug.
+            return "handled"
+          end
+          -- CoS absent (or expired): cast. Malediction applies CoA too.
+          cosRemaining = 20.0
+          coaRemaining = 20.0
+          return true
+        end
+        if name == "Curse of Agony" then
+          if coaRemaining > rt then return false end
+          coaRemaining = 20.0
+          return true
+        end
+        return false
+      end,
+    }
+
+    -- Build entry list from real SPELL_PRIORITY: CoS(6), CoA(7), DS(23).
+    local cosEntry, coaEntry, dsEntry
+    for _, e in ipairs(SPELL_PRIORITY) do
+      if e.name == "Curse of Shadow" and e.type == "curse" then cosEntry = e end
+      if e.name == "Curse of Agony"  and e.type == "curse" then coaEntry = e end
+      if e.name == "Drain Soul"      and e.type == "cast"  then dsEntry  = e end
+    end
+    local function cp(e) local c={}; for k,v in pairs(e) do c[k]=v end; return c end
+    local cos = cp(cosEntry); cos.enabled = true
+    local coa = cp(coaEntry); coa.enabled = true
+    local ds  = cp(dsEntry);  ds.enabled  = true
+    local entries = { cos, coa, ds }
+    table.sort(entries, function(a, b) return (a.priority or 99) < (b.priority or 99) end)
+
+    local function reset_np()
+      AutoLock._npQueuedThisCast = false
+      AutoLock._npQueuedPriority = 99999
+    end
+
+    -- ── I1: neither curse on target → CoS fires (Malediction applies both) ──
+    cosRemaining = 0.0; coaRemaining = 0.0; reset_np()
+    eq(AutoLock:_testRunList(entries), "Curse of Shadow",
+      "I1 both absent: CoS fires (applies CoS+CoA via Malediction)")
+
+    -- ── I2: CoS already on target (18 s), CoA also on target.
+    -- BUG: CoS condition passes → Cursive returns "handled" (truthy) →
+    --      _npQueuedThisCast stuck true → rotation frozen.
+    -- EXPECTED (fix): CoS condition detects CoS already present → false →
+    --      CoA also has time → both skip → DS fires.
+    cosRemaining = 18.0; coaRemaining = 18.0; reset_np()
+    eq(AutoLock:_testRunList(entries), "Drain Soul",
+      "I2 CoS+CoA both fresh (18 s): CoS must be skipped → DS fires (BUG: frozen)")
+
+    -- ── I3: CoA on target (18 s) but CoS NOT yet applied.
+    -- CoS should fire to add the shadow bonus (CoA present but CoS absent is OK).
+    cosRemaining = 0.0; coaRemaining = 18.0; reset_np()
+    eq(AutoLock:_testRunList(entries), "Curse of Shadow",
+      "I3 CoA present but no CoS: CoS fires to add shadow bonus")
+
+    -- ── I4: CoS expired but CoA still up → CoS fires (reapplies shadow bonus) ──
+    cosRemaining = 0.0; coaRemaining = 5.0; reset_np()
+    eq(AutoLock:_testRunList(entries), "Curse of Shadow",
+      "I4 CoS expired, CoA still up: CoS fires (reapplies shadow bonus)")
+
+    -- ── I5: both expired → CoS fires again ──
+    cosRemaining = 0.0; coaRemaining = 0.0; reset_np()
+    eq(AutoLock:_testRunList(entries), "Curse of Shadow",
+      "I5 both expired: CoS fires")
+  end)
+  env:restore()
+  if not ok_r then fail("[cos_coa_rotation_stops] crashed", tostring(err)) end
+end)
+
 -- ============================================================
 -- Suite: facing_curse_fallback
 -- When a cast-type spell (Death Coil) fails due to facing, the
@@ -1760,6 +1891,87 @@ suite("facing_curse_fallback", function()
   env:restore()
   AutoLock:_testSetFacingFailedSpell(nil)
   if not pass then fail("[facing_curse_fallback] crashed", tostring(err)) end
+end)
+
+-- ── curse_np_flag_not_set ─────────────────────────────────────
+-- After a curse-type spell fires, _npQueuedThisCast must NOT be set.
+-- Root cause of the freeze: instant curses set the NP flag; the next
+-- press finds the curse already on target (condition=false) and the NP
+-- guard blocks every higher-numbered priority → nothing fires → no
+-- SPELLCAST_STOP → flag stuck permanently.
+-- Fix: in TryAction's "if ok then" block, skip flag-setting for type=="curse".
+suite("curse_np_flag_not_set", function()
+  local env = rot_env_new()
+  local ok_r, err = pcall(function()
+    AutoLock.IsOnCooldown = function() return true end  -- DC/SB/etc on CD
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+    AutoLock._combatConfigName = nil
+
+    local cosRemaining = 0.0
+    local coaRemaining = 0.0
+
+    -- Accurate Malediction/Cursive mock: CoS cast applies both CoS+CoA.
+    -- When CoS is already on target, Cursive returns "handled" (truthy non-true).
+    Cursive = {
+      curses = {
+        HasCurse = function(self, name, guid, refreshtime)
+          if name == "curse of shadow" then return cosRemaining > refreshtime end
+          if name == "curse of agony"  then return coaRemaining > refreshtime end
+          return false
+        end,
+      },
+      Curse = function(self, name, tgt, opts)
+        local rt = (opts and opts.refreshtime) or 1
+        if name == "Curse of Shadow" then
+          if cosRemaining > rt then return "handled" end
+          cosRemaining = 20.0; coaRemaining = 20.0; return true
+        end
+        if name == "Curse of Agony" then
+          if coaRemaining > rt then return false end
+          coaRemaining = 20.0; return true
+        end
+        return false
+      end,
+    }
+
+    local cosEntry, dsEntry
+    for _, e in ipairs(SPELL_PRIORITY) do
+      if e.name == "Curse of Shadow" and e.type == "curse" then cosEntry = e end
+      if e.name == "Drain Soul"      and e.type == "cast"  then dsEntry  = e end
+    end
+    local function cp(e) local c={}; for k,v in pairs(e) do c[k]=v end; return c end
+    local cos = cp(cosEntry); cos.enabled = true
+    local ds  = cp(dsEntry);  ds.enabled  = true
+    local entries = { cos, ds }
+
+    -- N1: no curses on target → CoS fires (returns true), sets CoS+CoA to 20 s.
+    cosRemaining = 0.0; coaRemaining = 0.0
+    eq(AutoLock:_testRunList(entries), "Curse of Shadow",
+      "N1 no curses: CoS fires")
+
+    -- N2: NP flag must NOT be set after a curse fires.
+    is_false(AutoLock._npQueuedThisCast,
+      "N2 after curse fires: _npQueuedThisCast must remain false")
+
+    -- N3: next press WITHOUT clearing the flag (simulates rapid pressing).
+    -- CoS already on target → condition returns false (HasCurse guard).
+    -- NP flag is false → DS is NOT blocked → DS fires.
+    eq(AutoLock:_testRunList(entries), "Drain Soul",
+      "N3 rapid press after CoS: DS fires (no freeze, NP flag not set for curses)")
+
+    -- N4: when only CoS is in the list and it is already on target, nothing fires
+    -- and the NP flag must remain false (condition gate prevents Cursive call).
+    cosRemaining = 20.0; coaRemaining = 20.0
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+    is_nil(AutoLock:_testRunList({cos}),
+      "N4 CoS already up (only CoS in list): nothing fires")
+    is_false(AutoLock._npQueuedThisCast,
+      "N4b NP flag stays false when nothing fires")
+  end)
+  env:restore()
+  if not ok_r then fail("[curse_np_flag_not_set] crashed", tostring(err)) end
 end)
 
 -- ============================================================

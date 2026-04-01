@@ -1,7 +1,7 @@
 # AutoLock
 
 > **Priority-based spell rotation addon for Warlocks on [TurtleWoW](https://turtle-wow.org) (Vanilla WoW 1.12)**
-> Version 1.0.7
+> Version 1.0.8
 
 ![alt text](assets/main_window.png)
 
@@ -327,6 +327,26 @@ Click the **"Buy me a Coffee – PayPal"** button inside the Settings panel to p
 <a href="https://paypal.me/TWoWCoffee"><img src="assets/dark.svg" height="72"></a>
 
 <!-- IMAGE: Screenshot of the Settings panel with the PayPal button highlighted. -->
+
+## Changelog
+
+### v1.0.8
+- **Fix: rotation freeze after Curse of Shadow.** After CoS fired, rapid pressing got stuck: the curse condition correctly detected CoS already on the target and returned false, but the nampower queue flag was already set, blocking every spell with a higher priority number. Nothing fired → no `SPELLCAST_STOP` → flag stuck permanently. Fix: curse-type spells no longer set the nampower queue flag (curses are instant; the flag is only meaningful for queued cast-bar spells).
+- **Fix: CoS condition guard.** Added a `HasCurse("curse of shadow")` check to the Curse of Shadow condition. Without it, `Cursive:Curse()` returned a truthy `"handled"` response when CoS was already on the target, which AutoLock misread as a successful cast — triggering the freeze described above.
+- **Refactor: engine split into separate files.** `AutoLockEngine.lua` now holds all guard logic, channeling state, and `TryAction`. `AutoLockSpells.lua` holds the `SPELL_PRIORITY` table. `AutoLockSoulShards.lua` holds soul shard management. This makes each concern easier to read and test independently.
+
+### v1.0.7
+- Added *Require full dot time* guard to Dark Harvest: DH only fires if the selected dots have enough time remaining for the full channel to deal damage (configurable per-dot in the DH Cfg popup).
+- Added facing-failure guard: if a spell fails with "Target needs to be in front of you", that spell is skipped on the same press and retried on the next.
+
+### v1.0.6
+- Added facing-failure guard as an initial implementation (refined in v1.0.7).
+
+### v1.0.5
+- Fixed Malediction compatibility for `HasCurse` calls: CoS and CoA share the same debuff slot under Malediction; the rotation now correctly treats them as occupying the same slot.
+
+### v1.0.4
+- nampower integration: spell queueing via `ChannelStopCastingNextTick`, direct range/mana/duration queries via nampower APIs, falling back to tooltip scans when nampower is absent.
 
 ---
 
