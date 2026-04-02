@@ -1,7 +1,7 @@
 # AutoLock
 
 > **Priority-based spell rotation addon for Warlocks on [TurtleWoW](https://turtle-wow.org) (Vanilla WoW 1.12)**
-> Version 1.0.8
+> Version 1.0.9
 
 ![alt text](assets/main_window.png)
 
@@ -329,6 +329,11 @@ Click the **"Buy me a Coffee – PayPal"** button inside the Settings panel to p
 <!-- IMAGE: Screenshot of the Settings panel with the PayPal button highlighted. -->
 
 ## Changelog
+
+### v1.0.9
+- **Fix: rotation hang after full curse rotation.** When a cast-type spell with priority 10–21 (Death Coil prio=20, Shadowburn prio=21) fired and was held in the nampower queue, subsequent curse applications (prio 6–9) passed the NP guard unblocked — but did not clear the queue flag. Once all four curses were applied, DS (prio=23) and DH (prio=22) were blocked by the guard (`23 > 20`, `22 > 20`) until `SPELLCAST_STOP` fired at GCD end (~1 s later), causing a visible dead-press hang. Fix: when a curse fires successfully it now explicitly clears `_npQueuedThisCast`. Previously queued cast-type spells have already been dispatched by nampower by the time all curses are applied.
+- **Tests: multi-target rotation suite** with clock advancement, refreshtime cycles, and full invariant checking across 79 rotation visits (standard + random configs).
+- **Tests: freeze regression suite** (`freeze_after_curse_rotation`) that exercises the exact NP-flag scenario above with `pressNP()` — a helper that does not reset the flag between presses, mirroring real-game behaviour.
 
 ### v1.0.8
 - **Fix: rotation freeze after Curse of Shadow.** After CoS fired, rapid pressing got stuck: the curse condition correctly detected CoS already on the target and returned false, but the nampower queue flag was already set, blocking every spell with a higher priority number. Nothing fired → no `SPELLCAST_STOP` → flag stuck permanently. Fix: curse-type spells no longer set the nampower queue flag (curses are instant; the flag is only meaningful for queued cast-bar spells).

@@ -1974,6 +1974,560 @@ suite("curse_np_flag_not_set", function()
   if not ok_r then fail("[curse_np_flag_not_set] crashed", tostring(err)) end
 end)
 
+-- ── low_mana_lifetap_priority ─────────────────────────────────
+-- Bug: when a dot (e.g. Corruption) can't fire due to low mana,
+-- AutoLock queues Life Tap via nampower AND then queues Drain Soul
+-- on the same macro press. Because nampower is last-write-wins, DS
+-- overwrites Life Tap's queue slot. DS then starts channeling, so
+-- Life Tap never executes and the player's mana is never restored.
+--
+-- The trigger: DrainSoulFinished() = true (channel elapsed or not
+-- yet started) → mana check fires for Corruption → Life Tap queued.
+-- Then the rotation continues because Corruption returns false (the
+-- cached playerMana value is still < cost after Life Tap). DS has no
+-- known mana cost (GetSpellManaCostByName returns nil → check skipped)
+-- → DS queues itself, overwriting Life Tap in the nampower slot.
+--
+-- Expected: Life Tap is queued → rotation stops immediately → DS does
+-- NOT fire on this press → next press: mana restored, Corruption fires.
+suite("low_mana_lifetap_priority", function()
+  local env = rot_env_new()
+  local savedCSBN  = CastSpellByName
+  local savedUM    = UnitMana
+  local savedGSMCB = AutoLock.GetSpellManaCostByName
+  local function restore_extra()
+    CastSpellByName = savedCSBN
+    UnitMana        = savedUM
+    AutoLock.GetSpellManaCostByName = savedGSMCB
+  end
+  local ok_r, err = pcall(function()
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+
+    -- Player has 100 mana — not enough for Corruption (190 mana).
+    UnitMana = function(unit) return unit == "player" and 100 or 10000 end
+
+    -- Corruption costs 190; DS cost unknown (nil) → mana check skipped for DS.
+    AutoLock.GetSpellManaCostByName = function(_, name)
+      if name == "Corruption" then return 190 end
+      return nil
+    end
+
+    local lifeTapFired = false
+    local dsFired      = false
+    CastSpellByName = function(name, target)
+      if name == "Life Tap"   then lifeTapFired = true end
+      if name == "Drain Soul" then dsFired      = true end
+      env.lastCast = name
+    end
+
+    local corrEntry, dsEntry
+    for _, e in ipairs(SPELL_PRIORITY) do
+      if e.name == "Corruption" and e.type == "curse" then corrEntry = e end
+      if e.name == "Drain Soul"  and e.type == "cast"  then dsEntry  = e end
+    end
+    local function cp(e) local c={}; for k,v in pairs(e) do c[k]=v end; return c end
+    local corr = cp(corrEntry); corr.enabled = true
+    local ds   = cp(dsEntry);   ds.enabled   = true
+
+    -- ── M1/M2: DS not channeling, mana low ───────────────────────
+    AutoLock:_testSetDrainSoulChanneling(false)
+    AutoLock:_testRunList({corr, ds})
+
+    is_true(lifeTapFired,
+      "M1 Life Tap is queued when mana is too low for Corruption")
+    is_false(dsFired,
+      "M2 DS must not fire on same press as Life Tap (BUG: DS overwrites Life Tap in NP queue)")
+
+    -- ── M3/M4: DS channel just elapsed (DrainSoulFinished=true via timing) ──
+    -- DrainSoulChanneling flag is still true but the channel has expired by
+    -- wall-clock time. DrainSoulFinished() returns true → mana check fires →
+    -- Life Tap queued. DS condition also returns true → DS also queues itself,
+    -- again overwriting Life Tap's nampower slot.
+    lifeTapFired = false
+    dsFired      = false
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+    env.np.channeling = false  -- GetCurrentCastingInfo shows channel ended
+    AutoLock:_testSetDrainSoulChanneling(true)
+    AutoLock:_testSetDrainSoulTiming(GetTime() - 20, 5)  -- elapsed 20 s > 5 s duration
+
+    AutoLock:_testRunList({corr, ds})
+
+    is_true(lifeTapFired,
+      "M3 Life Tap queued when DS elapsed but flag still set (timing edge case)")
+    is_false(dsFired,
+      "M4 DS must not fire on same press as Life Tap (BUG: DS overwrites Life Tap in NP queue)")
+  end)
+  restore_extra()
+  env:restore()
+  if not ok_r then fail("[low_mana_lifetap_priority] crashed", tostring(err)) end
+end)
+
+-- ── multi_target_rotation ─────────────────────────────────────
+-- Drives the full rotation across three targets with repeated target
+-- switching and clock advancement so every curse goes through at
+-- least one full apply → active → needs-refresh → refresh cycle.
+--
+-- Two configs:
+--
+--   Standard config (CoS rt=0, CoA rt=12, Corruption rt=8, DS):
+--     T1: Corruption pre-applied
+--     T2: CoA + Corruption pre-applied
+--     T3: nothing pre-applied
+--     5 clock steps (5000→5013→5016→5025→5038):
+--       step 1 (5000): initial application
+--       step 2 (5013): CoA refresh (11s < rt=12)
+--       step 3 (5016): Corruption refresh (8s = rt=8, not strictly >)
+--       step 4 (5025): CoS expired + CoA refresh
+--       step 5 (5038): CoA + Corruption refresh again
+--     → 15 full rotations (5 steps × 3 targets), every curse refreshed ≥ once
+--
+--   Random config (seed=42, 4 rounds × 4 clock advances × 4 target visits):
+--     Random enabled set, random refreshtimes from {0,8,12},
+--     random pre-applied state, random target visit order.
+--     pressFullRotation invariants checked every visit:
+--       1. DS fires last
+--       2. Only enabled spells appear in the cast sequence
+--       3. Every curse that needed action was cast
+--       4. Every curse that was still active was NOT recast
+--       5. All enabled curses are active above their refreshtime afterward
+suite("multi_target_rotation", function()
+  local env = rot_env_new()
+  local ok_r, err = pcall(function()
+
+    -- ── Mutable clock + curse store ───────────────────────────────
+    -- CLOCK is upvalued so helpers always read the current value.
+    local CLOCK    = 5000
+    local CURSE_DUR = 24   -- seconds; must exceed the largest refreshtime (12)
+
+    GetTime = function() return CLOCK end
+
+    local curseState = {}  -- [guid][lowerName] = expiresAt
+
+    local function applyC(guid, name)
+      if not curseState[guid] then curseState[guid] = {} end
+      curseState[guid][string.lower(name)] = CLOCK + CURSE_DUR
+    end
+
+    -- Returns true when the curse is active with > rt seconds remaining.
+    local function activeC(guid, name, rt)
+      local gs  = curseState[guid];          if not gs  then return false end
+      local exp = gs[string.lower(name)];    if not exp then return false end
+      return (exp - CLOCK) > (rt or 0)
+    end
+
+    -- ── Targets ───────────────────────────────────────────────────
+    local T1, T2, T3 = "guid-mt1", "guid-mt2", "guid-mt3"
+    local currentGuid = T1
+
+    UnitExists = function(u)
+      if u == "target" then return 1, currentGuid end
+    end
+
+    -- ── Cursive mock with per-GUID, per-refreshtime tracking ──────
+    Cursive = {
+      curses = {
+        HasCurse = function(_, name, guid, rt, _)
+          return activeC(guid, name, rt)
+        end,
+      },
+      Curse = function(_, name, target, opts)
+        local _, guid = UnitExists(target or "target")
+        if not guid then return false end
+        local rt = opts and opts.refreshtime or 0
+        if activeC(guid, name, rt) then return false end
+        applyC(guid, name)
+        return true
+      end,
+    }
+
+    CastSpellByName = function(_) end
+
+    -- ── Press helpers ─────────────────────────────────────────────
+    local function press(list)
+      AutoLock._npQueuedThisCast = false
+      AutoLock._npQueuedPriority = 99999
+      AutoLock:_testSetDrainSoulChanneling(false)
+      return AutoLock:_testRunList(list)
+    end
+
+    local function pressUntilDS(list)
+      local fired = {}
+      for _ = 1, 10 do
+        local r = press(list)
+        if r then table.insert(fired, r) end
+        if r == "Drain Soul" then break end
+      end
+      return fired
+    end
+
+    -- ── Spell-list builder ────────────────────────────────────────
+    -- cdefs: array of { name, lname, key, prio, rt }
+    -- en:    { cos=true/false, coa=…, corr=…, sl=… }
+    -- Condition uses cd.rt (entry.refreshtime) for the HasCurse gate,
+    -- which matches the refreshtime passed to Cursive:Curse by TryAction.
+    local function makeList(cdefs, en)
+      local list = {}
+      for _, cd in ipairs(cdefs) do
+        local lname = cd.lname   -- fresh upvalue each iteration
+        local rt    = cd.rt or 0
+        table.insert(list, {
+          name        = cd.name,
+          type        = "curse",
+          priority    = cd.prio,
+          refreshtime = rt,
+          target      = "target",
+          enabled     = en[cd.key] == true,
+          condition   = function(_, entry)
+            if Cursive and Cursive.curses then
+              local _, g = UnitExists("target")
+              local r2   = entry and entry.refreshtime or 0
+              if g and Cursive.curses:HasCurse(lname, g, r2) then return false end
+            end
+            return true
+          end,
+        })
+      end
+      table.insert(list, {
+        name      = "Drain Soul",
+        type      = "cast",
+        priority  = 23,
+        target    = "target",
+        enabled   = true,
+        condition = function() return AutoLockEngine.DrainSoulFinished() end,
+      })
+      return list
+    end
+
+    -- ── pressFullRotation ─────────────────────────────────────────
+    -- Before pressing: snapshot which curses need action (missing or
+    -- below refreshtime threshold). After pressing:
+    --   1. DS fires last
+    --   2. Every needed curse was cast exactly
+    --   3. Every curse that was still active was NOT recast
+    --   4. All enabled curses are active above their refreshtime afterward
+    local function pressFullRotation(list, guid, label)
+      local needs = {}
+      for _, e in ipairs(list) do
+        if e.type == "curse" and e.enabled then
+          if not activeC(guid, e.name, e.refreshtime or 0) then
+            needs[e.name] = true
+          end
+        end
+      end
+
+      local fired = pressUntilDS(list)
+
+      is_true(fired[#fired] == "Drain Soul", label .. ": DS fires last")
+
+      for name, _ in pairs(needs) do
+        local found = false
+        for _, f in ipairs(fired) do if f == name then found = true end end
+        is_true(found, label .. ": " .. name .. " cast (needed)")
+      end
+
+      for _, e in ipairs(list) do
+        if e.type == "curse" and e.enabled and not needs[e.name] then
+          local found = false
+          for _, f in ipairs(fired) do if f == e.name then found = true end end
+          is_false(found, label .. ": " .. e.name .. " NOT recast (active)")
+        end
+      end
+
+      for _, e in ipairs(list) do
+        if e.type == "curse" and e.enabled then
+          is_true(activeC(guid, e.name, e.refreshtime or 0),
+            label .. ": " .. e.name .. " active (rt>=" .. (e.refreshtime or 0) .. "s) after")
+        end
+      end
+    end
+
+    -- ════════════════════════════════════════════════════════════
+    -- STANDARD CONFIG
+    -- CoS rt=0 (reapply only when expired)
+    -- CoA rt=12 (refresh when <12 s remaining)
+    -- Corruption rt=8 (refresh when ≤8 s remaining)
+    --
+    -- T1: Corruption pre-applied
+    -- T2: CoA + Corruption pre-applied
+    -- T3: nothing pre-applied
+    --
+    -- Clock steps drive diverse refresh patterns across all targets:
+    --   5000 → initial application
+    --   5013 → 11 s remaining; CoA(rt=12) needs refresh
+    --   5016 →  8 s remaining; Corruption(rt=8) needs refresh
+    --   5025 → CoS expired; CoA(rt=12) needs refresh again
+    --   5038 → CoA + Corruption both need refresh
+    -- ════════════════════════════════════════════════════════════
+    local STD_CDEFS = {
+      { name = "Curse of Shadow", lname = "curse of shadow", key = "cos",  prio = 6,  rt = 0  },
+      { name = "Curse of Agony",  lname = "curse of agony",  key = "coa",  prio = 7,  rt = 12 },
+      { name = "Corruption",      lname = "corruption",       key = "corr", prio = 8,  rt = 8  },
+      { name = "Siphon Life",     lname = "siphon life",      key = "sl",   prio = 9,  rt = 0  },
+    }
+
+    curseState = {}
+    local std = makeList(STD_CDEFS, { cos = true, coa = true, corr = true, sl = false })
+
+    CLOCK = 5000
+    applyC(T1, "Corruption")          -- T1: only CoS + CoA missing
+    applyC(T2, "Curse of Agony")       -- T2: only CoS missing
+    applyC(T2, "Corruption")
+
+    local STD_CLOCKS = { 5000, 5013, 5016, 5025, 5038 }
+    local STD_TGTS   = { T1, T2, T3 }
+    local STD_TNAMES = { "T1", "T2", "T3" }
+
+    for _, clk in ipairs(STD_CLOCKS) do
+      CLOCK = clk
+      for ti, guid in ipairs(STD_TGTS) do
+        currentGuid = guid
+        pressFullRotation(std, guid,
+          string.format("STD clk=%d %s", clk, STD_TNAMES[ti]))
+      end
+    end
+
+    -- ════════════════════════════════════════════════════════════
+    -- RANDOM CONFIG  (seed=42)
+    -- 4 rounds × 4 clock advances × 4 target visits
+    -- = 64 full rotations; refreshtimes drawn from {0, 8, 12}
+    -- ════════════════════════════════════════════════════════════
+    local RND_TGTS  = { "guid-ra", "guid-rb", "guid-rc" }
+    local RNG_RTS   = { 0, 8, 12 }
+    -- Relative clock steps chosen so at least one rt=12 curse needs
+    -- refresh (Δ=11 s) and at least one rt=8 curse expires (Δ=9 s).
+    local RND_STEPS = { 0, 11, 9, 6 }
+
+    math.randomseed(42)
+
+    for round = 1, 4 do
+      curseState = {}
+      CLOCK = 10000
+
+      -- Random CDEFS: each spell gets a random refreshtime
+      local rcdefs = {}
+      for _, cd in ipairs(STD_CDEFS) do
+        local rcd = {}
+        for k, v in pairs(cd) do rcd[k] = v end
+        rcd.rt = RNG_RTS[math.random(#RNG_RTS)]
+        table.insert(rcdefs, rcd)
+      end
+
+      -- Random enabled set; at least one curse enabled
+      local en  = {}
+      local any = false
+      for _, cd in ipairs(rcdefs) do
+        en[cd.key] = (math.random(2) == 1)
+        if en[cd.key] then any = true end
+      end
+      if not any then en.cos = true end
+      local rList = makeList(rcdefs, en)
+
+      -- Random pre-applied curses per target
+      for _, guid in ipairs(RND_TGTS) do
+        for _, cd in ipairs(rcdefs) do
+          if math.random(2) == 1 then applyC(guid, cd.name) end
+        end
+      end
+
+      -- Random visit order (Fisher-Yates) + revisit first
+      local order = { RND_TGTS[1], RND_TGTS[2], RND_TGTS[3] }
+      for i = 3, 2, -1 do
+        local j = math.random(i)
+        order[i], order[j] = order[j], order[i]
+      end
+      table.insert(order, order[1])
+
+      for si, step in ipairs(RND_STEPS) do
+        CLOCK = CLOCK + step
+        for _, guid in ipairs(order) do
+          currentGuid = guid
+          pressFullRotation(rList, guid,
+            string.format("RAND r=%d s=%d g=%.6s", round, si, guid))
+        end
+      end
+    end
+
+  end)
+  env:restore()
+  if not ok_r then fail("[multi_target_rotation] crashed", tostring(err)) end
+end)
+
+-- ── freeze_after_curse_rotation ──────────────────────────────
+-- Root cause: when a cast-type spell with priority 10–21 fires
+-- (Death Coil=20, Shadowburn=21) it stores its priority in
+-- _npQueuedPriority.  Curses (prio 6–9) are NOT blocked by the
+-- NP guard because 6–9 ≤ 20.  But curses also do NOT clear
+-- _npQueuedThisCast (by design — clearing it for curses would
+-- cause a different permanent freeze).  So after all four curses
+-- are applied the flag is still live with the old priority.
+-- DS (prio=23>20) and DH (prio=22>20) are then blocked; the
+-- rotation returns nil and "hangs" until SPELLCAST_STOP fires.
+--
+-- The existing press() helper always resets _npQueuedThisCast=false
+-- before each call, which hides this bug entirely.  pressNP() does
+-- NOT reset the flag, simulating real gameplay where the flag
+-- persists between macro presses until SPELLCAST_STOP clears it.
+suite("freeze_after_curse_rotation", function()
+  local env = rot_env_new()
+  local ok_r, err = pcall(function()
+
+    -- ── Per-GUID curse store ──────────────────────────────────────
+    local CLOCK    = 9000
+    local CURSE_DUR = 24
+    local curseState = {}
+
+    GetTime = function() return CLOCK end
+
+    local function applyC(guid, name)
+      if not curseState[guid] then curseState[guid] = {} end
+      curseState[guid][string.lower(name)] = CLOCK + CURSE_DUR
+    end
+    local function activeC(guid, name, rt)
+      local gs  = curseState[guid];           if not gs  then return false end
+      local exp = gs[string.lower(name)];     if not exp then return false end
+      return (exp - CLOCK) > (rt or 0)
+    end
+
+    local tGuid = "guid-freeze"
+    UnitExists = function(u)
+      if u == "target" then return 1, tGuid end
+    end
+
+    Cursive = {
+      curses = {
+        HasCurse = function(_, name, guid, rt, _) return activeC(guid, name, rt) end,
+      },
+      Curse = function(_, name, tgt, opts)
+        local _, guid = UnitExists(tgt or "target")
+        if not guid then return false end
+        local rt = opts and opts.refreshtime or 0
+        if activeC(guid, name, rt) then return false end
+        applyC(guid, name)
+        return true
+      end,
+    }
+    CastSpellByName = function(_) end
+
+    -- pressNP: does NOT reset _npQueuedThisCast between presses.
+    -- This mirrors real gameplay: the flag persists across macro presses
+    -- and is only cleared by the SPELLCAST_STOP event (simulated manually).
+    local function pressNP(list)
+      AutoLock:_testSetDrainSoulChanneling(false)
+      return AutoLock:_testRunList(list)
+    end
+
+    -- ── Spell list builder ────────────────────────────────────────
+    local CDEFS = {
+      { name="Curse of Shadow", lname="curse of shadow", prio=6 },
+      { name="Curse of Agony",  lname="curse of agony",  prio=7 },
+      { name="Corruption",      lname="corruption",       prio=8 },
+      { name="Siphon Life",     lname="siphon life",      prio=9 },
+    }
+    local function makeList(withDH)
+      local list = {}
+      for _, cd in ipairs(CDEFS) do
+        local lname = cd.lname
+        table.insert(list, {
+          name=cd.name, type="curse", priority=cd.prio, refreshtime=0,
+          target="target", enabled=true,
+          condition=function(_, entry)
+            if Cursive and Cursive.curses then
+              local _, g = UnitExists("target")
+              local rt = entry and entry.refreshtime or 0
+              if g and Cursive.curses:HasCurse(lname, g, rt) then return false end
+            end
+            return true
+          end,
+        })
+      end
+      if withDH then
+        table.insert(list, {
+          name="Dark Harvest", type="cast", priority=22,
+          target="target", enabled=true,
+          condition=function() return AutoLockEngine.DarkHarvestFinished() end,
+        })
+      end
+      table.insert(list, {
+        name="Drain Soul", type="cast", priority=23,
+        target="target", enabled=true,
+        condition=function() return AutoLockEngine.DrainSoulFinished() end,
+      })
+      return list
+    end
+
+    local list   = makeList(false)   -- CoS+CoA+Corr+SL + DS
+    local listDH = makeList(true)    -- same + DH(22)
+
+    -- Applies all four curses via pressNP and asserts order.
+    local function applyCurses(lst, tag)
+      local r
+      r = pressNP(lst); eq(r, "Curse of Shadow", tag .. "1: CoS fires")
+      r = pressNP(lst); eq(r, "Curse of Agony",  tag .. "2: CoA fires")
+      r = pressNP(lst); eq(r, "Corruption",       tag .. "3: Corruption fires")
+      r = pressNP(lst); eq(r, "Siphon Life",      tag .. "4: SL fires")
+    end
+
+    -- ── F1: Death Coil (prio=20) in NP queue ─────────────────────
+    -- Curses prio 6–9 are not blocked (6–9 ≤ 20 → condition false).
+    -- After all curses applied, DS prio=23: 23>20 → BLOCKED.
+    curseState = {}
+    AutoLock._npQueuedThisCast = true
+    AutoLock._npQueuedPriority = 20
+    applyCurses(list, "F1-")
+    local r = pressNP(list)
+    eq(r, "Drain Soul",
+      "F1-5: DS fires after all curses (BUG: blocked when Death Coil prio=20 in NP queue)")
+
+    -- ── F2: Shadowburn (prio=21) in NP queue ─────────────────────
+    curseState = {}
+    AutoLock._npQueuedThisCast = true
+    AutoLock._npQueuedPriority = 21
+    applyCurses(list, "F2-")
+    r = pressNP(list)
+    eq(r, "Drain Soul",
+      "F2-5: DS fires after all curses (BUG: blocked when Shadowburn prio=21 in NP queue)")
+
+    -- ── F3: DH (prio=22) also blocked by Death Coil in queue ─────
+    -- DH fires before DS when nothing else to do; but 22>20 → BLOCKED.
+    curseState = {}
+    AutoLock._npQueuedThisCast = true
+    AutoLock._npQueuedPriority = 20
+    applyCurses(listDH, "F3-")
+    r = pressNP(listDH)
+    eq(r, "Dark Harvest",
+      "F3-5: DH fires after all curses (BUG: prio=22 also blocked by DC in NP queue)")
+
+    -- ── F4: baseline — NP flag clear, DS fires normally ──────────
+    -- Verifies the spell list itself is correct (no bug in the spells).
+    curseState = {}
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+    applyCurses(list, "F4-")
+    r = pressNP(list)
+    eq(r, "Drain Soul", "F4-5: DS fires normally when NP flag is clear (baseline)")
+
+    -- ── F5: SPELLCAST_STOP fires mid-rotation, rotation recovers ─
+    -- Simulates: DC in queue → CoS fires → CoA fires → GCD ends,
+    -- SPELLCAST_STOP clears flag → Corruption+SL+DS fire normally.
+    curseState = {}
+    AutoLock._npQueuedThisCast = true
+    AutoLock._npQueuedPriority = 20
+    r = pressNP(list); eq(r, "Curse of Shadow", "F5-1: CoS fires (DC in NP queue)")
+    r = pressNP(list); eq(r, "Curse of Agony",  "F5-2: CoA fires (DC in NP queue)")
+    -- Simulate SPELLCAST_STOP: GCD ends, Death Coil completes on server
+    AutoLock._npQueuedThisCast = false
+    AutoLock._npQueuedPriority = 99999
+    r = pressNP(list); eq(r, "Corruption",  "F5-3: Corruption fires after SPELLCAST_STOP")
+    r = pressNP(list); eq(r, "Siphon Life", "F5-4: SL fires")
+    r = pressNP(list); eq(r, "Drain Soul",  "F5-5: DS fires — NP flag cleared by SPELLCAST_STOP")
+
+  end)
+  env:restore()
+  if not ok_r then fail("[freeze_after_curse_rotation] crashed", tostring(err)) end
+end)
+
 -- ============================================================
 -- 6. Runner
 -- ============================================================

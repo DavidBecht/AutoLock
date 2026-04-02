@@ -41,6 +41,19 @@ local DARK_HARVEST_DEBUFF_NAMES = {
 -- ===========================
 -- Private helpers
 -- ===========================
+
+-- Returns the name of the spell currently being channeled, or nil.
+-- Uses visualSpellId (index 2) + isChanneling (index 5) from nampower's
+-- GetCurrentCastingInfo(). castingSpellId (index 1) is always nil for channels.
+-- visualSpellId is stale (holds last-cast ID) when not channeling, so the
+-- isChanneling guard is required.
+local function GetChannelingSpellName()
+  if not GetCurrentCastingInfo then return nil end
+  local _, visualSpellId, _, _, isChanneling = GetCurrentCastingInfo()
+  if isChanneling ~= 1 or not visualSpellId or visualSpellId == 0 then return nil end
+  return SpellInfo and SpellInfo(visualSpellId) or nil
+end
+
 local function targetGuid(unit)
   local _, guid = UnitExists(unit or "target")
   return guid
@@ -98,31 +111,31 @@ function AutoLockEngine.IsShadowTranceProc()
 end
 
 function AutoLockEngine.DrainSoulFinished()
-  if not DrainSoulChanneling then return true end
-  if GetCurrentCastingInfo then
-    local _, _, _, _, isChanneling = GetCurrentCastingInfo()
-    if not isChanneling or isChanneling == 0 then
-      DrainSoulChanneling = false
-      return true
-    end
+  -- Primary: direct query via nampower (self-healing, no event desync).
+  -- Fallback: event flag for when nampower is absent.
+  local channelingName = GetChannelingSpellName()
+  if channelingName ~= nil then
+    return channelingName ~= DRAIN_SOUL_NAME
   end
+  if not DrainSoulChanneling then return true end
   return (DrainSoulCastedAt + DrainSoulDuration) - GetTime() <= 0.04
 end
 
 function AutoLockEngine.DarkHarvestFinished()
-  if not DarkHarvestChanneling then return true end
-  if GetCurrentCastingInfo then
-    local _, _, _, _, isChanneling = GetCurrentCastingInfo()
-    if not isChanneling or isChanneling == 0 then
-      DarkHarvestChanneling = false
-      return true
-    end
+  local channelingName = GetChannelingSpellName()
+  if channelingName ~= nil then
+    return channelingName ~= DARK_HARVEST_NAME
   end
+  if not DarkHarvestChanneling then return true end
   return (DarkHarvestCastedAt + DarkHarvestDuration) - GetTime() <= 0.04
 end
 
 function AutoLockEngine.IsBlockedByDrainSoul(key)
-  if not DrainSoulChanneling then return false end
+  -- Primary: direct query.
+  local channelingName = GetChannelingSpellName()
+  local isDSChanneling = (channelingName == DRAIN_SOUL_NAME)
+    or (channelingName == nil and DrainSoulChanneling)
+  if not isDSChanneling then return false end
   if DrainSoulDuration > 0 and (GetTime() - DrainSoulCastedAt) >= (DrainSoulDuration - 0.04) then
     return false
   end
@@ -355,7 +368,9 @@ local function TryAction(entry)
   -- Nampower queue guard: prevent lower-priority spell from overwriting a
   -- higher-priority spell already queued in nampower's single-slot queue.
   if AutoLock._npQueuedThisCast then
-    local isChanneling = DrainSoulChanneling or DarkHarvestChanneling
+    local chanName = GetChannelingSpellName()
+    local isChanneling = (chanName == DRAIN_SOUL_NAME or chanName == DARK_HARVEST_NAME)
+      or (chanName == nil and (DrainSoulChanneling or DarkHarvestChanneling))
     if not isChanneling then
       local queuedPrio = AutoLock._npQueuedPriority or 99999
       if (entry.priority or 99999) > queuedPrio then
@@ -386,17 +401,21 @@ local function TryAction(entry)
     local playerMana = UnitMana("player")
     if manaCost and AutoLockEngine.DrainSoulFinished() and playerMana < manaCost then
       if not AutoLockDB or not AutoLockDB.settings or AutoLockDB.settings.useLifeTap ~= false then
+        -- Return true so the rotation loop stops here: Life Tap holds the
+        -- nampower queue slot and DS cannot overwrite it on this same press.
         CastSpellByName("Life Tap", t)
+        return true
       end
-      if playerMana < manaCost then
-        return false
-      end
+      return false
     end
   end
 
   local ok = false
+  local activeChannel = GetChannelingSpellName()
+    or (DrainSoulChanneling and DRAIN_SOUL_NAME)
+    or (DarkHarvestChanneling and DARK_HARVEST_NAME)
   if entry.type == "cast" then
-    if (DrainSoulChanneling or DarkHarvestChanneling) and ChannelStopCastingNextTick then
+    if activeChannel and ChannelStopCastingNextTick then
       ChannelStopCastingNextTick()
     end
     CastSpellByName(entry.name, t)
@@ -409,7 +428,7 @@ local function TryAction(entry)
 
   elseif entry.type == "curse" then
     if Cursive then
-      if (DrainSoulChanneling or DarkHarvestChanneling) and ChannelStopCastingNextTick then
+      if activeChannel and ChannelStopCastingNextTick then
         if Cursive.curses then
           local _, tGuid = UnitExists(t)
           local rt = entry.refreshtime or 1
@@ -431,14 +450,26 @@ local function TryAction(entry)
 
   if ok then
     SpellStartedName = entry.name
-    -- Curses are instant; SPELLCAST_STOP fires at GCD end, not immediately.
-    -- Setting the NP flag for curses causes the flag to stick when the player
-    -- presses again before GCD ends: the curse condition returns false (already
-    -- on target), the NP guard blocks every higher-numbered priority, nothing
-    -- fires, no SPELLCAST_STOP arrives, and the rotation freezes permanently.
     if entry.type ~= "curse" then
+      -- Non-curse cast queued in nampower: block lower-priority (higher-number)
+      -- spells from overwriting this slot before SPELLCAST_STOP clears the flag.
       AutoLock._npQueuedThisCast = true
       AutoLock._npQueuedPriority = entry.priority or 99999
+    else
+      -- Curse fired: clear any stale cast-type NP flag so DS/DH are not
+      -- blocked after all curses are applied.
+      -- Background: a cast-type spell (Death Coil prio=20, Shadowburn prio=21)
+      -- may have set the flag on a previous press.  Curses (prio 6-9) pass the
+      -- NP guard unblocked, but once all curses are up, DS (prio=23>20) and
+      -- DH (prio=22>20) would be blocked until SPELLCAST_STOP fires (~1 GCD
+      -- later), causing a visible rotation hang.  Clearing here is safe: by
+      -- the time all curses are applied the previously queued cast will have
+      -- executed, and DO NOT set the flag for curses (see note below).
+      -- NOTE: setting the flag for curses would cause a different permanent
+      -- freeze: curse already-on-target → condition returns false → NP guard
+      -- blocks everything → no SPELLCAST_STOP ever arrives for a curse.
+      AutoLock._npQueuedThisCast = false
+      AutoLock._npQueuedPriority = 99999
     end
   end
   return ok
@@ -477,6 +508,39 @@ function AutoLock:DoAutoLock(configName)
       if TryAction(entry) then return end
     end
   end
+end
+
+-- Debug: print all GetCurrentCastingInfo() return values + current channel flags.
+-- Usage: /run AutoLock:DebugCastingInfo()
+-- Run this while idle, while casting, and while channeling DS/DH.
+function AutoLock:DebugCastingInfo()
+  if not GetCurrentCastingInfo then
+    AutoLockLog.Warning("DebugCastingInfo: GetCurrentCastingInfo not available (nampower missing?)")
+    return
+  end
+  local castingSpellId, visualSpellId, autoRepeatSpellId, isCasting, isChanneling, pendingOnSwing, isAutoAttacking
+    = GetCurrentCastingInfo()
+
+  local function res(id)
+    if not id or id == 0 then return "nil" end
+    local name = nil
+    if SpellInfo then name = SpellInfo(id) end
+    if not name and GetSpellNameAndRankForId then name = GetSpellNameAndRankForId(id) end
+    if name then return id .. " (" .. name .. ")" end
+    return tostring(id)
+  end
+
+  AutoLockLog.Info("=== DebugCastingInfo ===")
+  AutoLockLog.Info("  castingSpellId   = " .. res(castingSpellId))
+  AutoLockLog.Info("  visualSpellId    = " .. res(visualSpellId))
+  AutoLockLog.Info("  autoRepeatSpellId= " .. res(autoRepeatSpellId))
+  AutoLockLog.Info("  isCasting        = " .. tostring(isCasting))
+  AutoLockLog.Info("  isChanneling     = " .. tostring(isChanneling))
+  AutoLockLog.Info("  pendingOnSwing   = " .. tostring(pendingOnSwing))
+  AutoLockLog.Info("  isAutoAttacking  = " .. tostring(isAutoAttacking))
+  AutoLockLog.Info("  [flags] DS=" .. tostring(DrainSoulChanneling)
+    .. " DH=" .. tostring(DarkHarvestChanneling)
+    .. " Wand=" .. tostring(WandShooting))
 end
 
 -- Debug: print remaining DoT timers for Dark Harvest.
